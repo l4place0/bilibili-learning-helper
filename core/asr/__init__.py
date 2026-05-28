@@ -35,3 +35,21 @@ def get_asr(provider: str = "", **kwargs) -> BaseASR:
     # Default: in-process whisper
     from core.asr.whisper import InProcessASR
     return InProcessASR()
+
+
+def format_segments_for_llm(segments: list[dict]) -> str:
+    """Format transcript segments for LLM consumption.
+
+    Converts segments list to: [S0 @00:00] text [S1 @00:15] text ...
+    Each segment gets a sequential ID and timestamp.
+    """
+    if not segments:
+        return ""
+    lines = []
+    for i, seg in enumerate(segments):
+        start = seg.get("start", 0)
+        m, s = divmod(int(start), 60)
+        ts = f"{m:02d}:{s:02d}"
+        text = seg.get("text", "").strip()
+        lines.append(f"[S{i} @{ts}] {text}")
+    return "\n".join(lines)

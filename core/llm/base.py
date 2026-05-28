@@ -56,25 +56,26 @@ class BaseLLM(ABC):
         logger.warning("Classification failed after 3 attempts, using general")
         return {"summary": "", "type": "general"}
 
-    def summarize(self, transcript: str, lang: str = "zh", detail: str = "normal", content_type: str | None = None) -> str:
+    def summarize(self, transcript: str, lang: str = "zh", detail: str = "normal", content_type: str | None = None, has_segments: bool = False) -> str:
         """Stage 2: Summarize with structured prompt based on content type."""
         from core.llm.prompts import DETAIL_MAX_TOKENS
         ct = content_type or "general"
-        prompt = get_summary_prompt(ct, lang, multimodal=False, detail=detail).format(transcript=transcript)
+        prompt = get_summary_prompt(ct, lang, multimodal=False, detail=detail, has_segments=has_segments).format(transcript=transcript)
         max_tokens = DETAIL_MAX_TOKENS.get(detail, 4096)
         return self._chat(prompt, max_tokens=max_tokens)
 
-    def summarize_stream(self, transcript: str, lang: str = "zh", detail: str = "normal", content_type: str | None = None):
+    def summarize_stream(self, transcript: str, lang: str = "zh", detail: str = "normal", content_type: str | None = None, has_segments: bool = False):
         """Stage 2: Stream summarize. Yields text chunks."""
         from core.llm.prompts import DETAIL_MAX_TOKENS
         ct = content_type or "general"
-        prompt = get_summary_prompt(ct, lang, multimodal=False, detail=detail).format(transcript=transcript)
+        prompt = get_summary_prompt(ct, lang, multimodal=False, detail=detail, has_segments=has_segments).format(transcript=transcript)
         max_tokens = DETAIL_MAX_TOKENS.get(detail, 4096)
         yield from self._chat_stream(prompt, max_tokens=max_tokens)
 
     def summarize_multimodal(
         self, transcript: str, video_path: Path, lang: str = "zh", detail: str = "normal",
         content_type: str | None = None, prefetched_frames: list[Path] | None = None,
+        has_segments: bool = False,
     ) -> str:
         """Stage 2: Summarize with video + structured prompt. Default: fall back to text-only."""
-        return self.summarize(transcript, lang, detail, content_type=content_type)
+        return self.summarize(transcript, lang, detail, content_type=content_type, has_segments=has_segments)

@@ -114,6 +114,12 @@ mark.current { background: var(--orange); }
 .transcript-seg:hover .note-btn { opacity: .6; }
 .transcript-seg .note-btn:hover { opacity: 1; }
 .transcript-seg .note-btn.has-note { opacity: 1; }
+.seg-cite { color: var(--accent); cursor: pointer; font-size: .85em; text-decoration: none; border-bottom: 1px dashed var(--accent); transition: background .15s; }
+.seg-cite:hover { background: rgba(108, 140, 255, .15); border-bottom-style: solid; }
+.frame-cite { color: #e67e22; cursor: pointer; font-size: .85em; text-decoration: none; border-bottom: 1px dashed #e67e22; transition: background .15s; }
+.frame-cite:hover { background: rgba(230,126,34,.15); border-bottom-style: solid; }
+.seg-frame { margin: 6px 0 6px 60px; }
+.seg-frame img { max-width: 200px; max-height: 120px; border-radius: 6px; border: 1px solid var(--border); }
 .seg-note { margin: 4px 0 4px 60px; padding: 8px 12px; background: rgba(108,140,255,.08); border-left: 3px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0; font-size: .85rem; color: var(--fg2); }
 .note-input-wrap { margin: 4px 0 4px 60px; display: flex; gap: 8px; }
 .note-input-wrap textarea { flex: 1; background: var(--bg3); border: 1px solid var(--fg3); border-radius: var(--radius); color: var(--fg); padding: 8px; font-size: .85rem; resize: vertical; min-height: 48px; outline: none; }
@@ -131,6 +137,44 @@ mark.current { background: var(--orange); }
 /* ===== No Data ===== */
 .empty-state { text-align: center; padding: 48px 24px; color: var(--fg3); }
 .empty-state p { margin-top: 8px; }
+
+/* ===== Question Type UI ===== */
+.type-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.type-btn { padding: 3px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg1); color: var(--fg2); cursor: pointer; font-size: .75rem; transition: all .15s; }
+.type-btn:hover { border-color: var(--accent); }
+.type-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.q-badge { font-size: .65rem; padding: 1px 6px; border-radius: 8px; background: var(--bg3); color: var(--fg3); margin-left: 6px; vertical-align: middle; }
+.q-card { background: var(--bg1); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }
+.q-card .q-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.q-card .q-type { font-size: .7rem; padding: 2px 8px; border-radius: 8px; background: var(--accent); color: #fff; }
+.q-card .q-diff { font-size: .7rem; color: var(--fg3); }
+.q-card .q-stem { font-size: .9rem; margin-bottom: 10px; line-height: 1.5; }
+.q-card .q-options { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.q-card .q-opt { padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; font-size: .85rem; transition: all .15s; }
+.q-card .q-opt:hover { border-color: var(--accent); }
+.q-card .q-opt.selected { border-color: var(--accent); background: rgba(108,140,255,.1); }
+.q-card .q-opt.correct { border-color: var(--green); background: rgba(76,175,80,.1); }
+.q-card .q-opt.wrong { border-color: var(--red); background: rgba(244,67,54,.1); }
+.q-card .q-blank-input { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg2); color: var(--fg); font-size: .85rem; min-width: 80px; }
+.q-card .q-blank-input.correct { border-color: var(--green); }
+.q-card .q-blank-input.wrong { border-color: var(--red); }
+.q-card .q-explanation { font-size: .8rem; color: var(--fg3); margin-top: 8px; padding: 8px; background: var(--bg2); border-radius: var(--radius); display: none; }
+.q-card .q-explanation.show { display: block; }
+.q-card .q-actions { display: flex; gap: 6px; margin-top: 10px; }
+.q-card .q-actions button { padding: 4px 12px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg2); color: var(--fg2); cursor: pointer; font-size: .8rem; }
+.q-card .q-actions button:hover { border-color: var(--accent); }
+.q-card .q-seq-item { padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 4px; cursor: grab; font-size: .85rem; background: var(--bg2); }
+.q-card .q-seq-item.dragging { opacity: .5; }
+.q-card .q-seq-item.correct-pos { border-color: var(--green); }
+.q-card .q-seq-item.wrong-pos { border-color: var(--red); }
+.q-card .q-match-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.q-card .q-match-item { padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); font-size: .85rem; text-align: center; cursor: pointer; }
+.q-card .q-match-item.selected { border-color: var(--accent); background: rgba(108,140,255,.1); }
+.q-card .q-match-item.matched { opacity: .5; cursor: default; }
+.q-card textarea.q-textarea { width: 100%; min-height: 60px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg2); color: var(--fg); font-size: .85rem; resize: vertical; }
+.q-card pre.q-code { background: var(--bg2); padding: 12px; border-radius: var(--radius); font-size: .8rem; overflow-x: auto; margin-bottom: 8px; }
+.q-card .q-key-points { font-size: .8rem; color: var(--fg3); margin-top: 6px; }
+.q-card .q-key-points li { margin: 2px 0; }
 </style>
 </head>
 <body>
@@ -166,6 +210,7 @@ mark.current { background: var(--orange); }
       <button class="btn btn-ghost" id="cards-reset">Reset All</button>
       <span class="count" id="cards-due-info"></span>
     </div>
+    <div class="type-filters" id="type-filters"></div>
     <div class="card-deck" id="card-deck"></div>
     {% else %}
     <div class="empty-state"><p>No review cards available for this video.</p></div>
@@ -226,6 +271,38 @@ $$('.nav-tab').forEach(tab => {
 });
 
 // ===== Simple Markdown Renderer =====
+function renderCiteSegment(m) {
+  var inner = m.slice(1, -1);
+  var parts = inner.split(/(\d+(?:\s*[-]\s*\d+)?)/g).filter(Boolean);
+  var result = '';
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i].trim();
+    if (/^\d/.test(p)) {
+      var clean = p.replace(/\s/g, '');
+      result += '<a class="seg-cite" data-seg="' + clean + '" title="Jump to segment ' + clean + '">[S' + p + ']</a>';
+    } else {
+      result += p;
+    }
+  }
+  return result;
+}
+
+function renderCiteFrame(m) {
+  var inner = m.slice(1, -1);
+  var parts = inner.split(/(F@\d{2}:\d{2})/g).filter(Boolean);
+  var result = '';
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i].trim();
+    if (/^F@/.test(p)) {
+      var ts = p.slice(2);
+      result += '<a class="frame-cite" data-ts="' + ts + '" title="View frame at ' + ts + '">[' + p + ']</a>';
+    } else {
+      result += p;
+    }
+  }
+  return result;
+}
+
 function renderMarkdown(md) {
   if (!md) return '';
   return md
@@ -235,6 +312,8 @@ function renderMarkdown(md) {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`(.+?)`/g, '<code>$1</code>')
+    .replace(/\[S[^\]]{1,50}\]/g, renderCiteSegment)
+    .replace(/\[F@[^\]]{1,100}\]/g, renderCiteFrame)
     .replace(/^- (.+)$/gm, '<li>$1</li>')
     .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
     .replace(/\n{2,}/g, '</p><p>')
@@ -247,6 +326,46 @@ const summaryEl = $('#summary-content');
 // Strip review cards section from displayed summary
 const summaryForDisplay = DATA.summary.replace(/##\s*(?:复习卡片|Review Cards)[\s\S]*$/i, '').trim();
 summaryEl.innerHTML = renderMarkdown(summaryForDisplay);
+
+// ===== Citation click → jump to transcript segment =====
+summaryEl.addEventListener('click', e => {
+  const cite = e.target.closest('.seg-cite');
+  if (cite) {
+    e.preventDefault();
+    const segRef = cite.dataset.seg.replace(/\s/g, '');
+    const firstSeg = parseInt(segRef.split(/[-,]/)[0]);
+    if (isNaN(firstSeg)) return;
+    $$('.nav-tab').forEach(t => t.classList.remove('active'));
+    $$('.panel').forEach(p => p.classList.remove('active'));
+    $('[data-tab="transcript"]').classList.add('active');
+    $('#panel-transcript').classList.add('active');
+    const segEl = document.querySelector(`.transcript-seg[data-idx="${firstSeg}"]`);
+    if (segEl) {
+      segEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      segEl.classList.add('highlight');
+      setTimeout(() => segEl.classList.remove('highlight'), 3000);
+    }
+    return;
+  }
+  // Frame citation → find nearest frame and show in lightbox
+  const frameCite = e.target.closest('.frame-cite');
+  if (frameCite) {
+    e.preventDefault();
+    const ts = frameCite.dataset.ts;
+    if (!ts || !DATA.frames || !DATA.frames.length) return;
+    const parts = ts.split(':');
+    const targetSec = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+    let best = null, bestDist = Infinity;
+    DATA.frames.forEach((f, i) => {
+      if (!f.timestamp) return;
+      const fp = f.timestamp.split(':');
+      const fSec = parseInt(fp[0]) * 60 + parseInt(fp[1]);
+      const dist = Math.abs(fSec - targetSec);
+      if (dist < bestDist) { bestDist = dist; best = i; }
+    });
+    if (best !== null) openLightbox(best);
+  }
+});
 
 // ===== Search =====
 function setupSearch(inputId, countId, prevId, nextId, targetEl) {
@@ -350,53 +469,212 @@ function getDueCards() {
   });
 }
 
+const TYPE_LABELS = {qa:'Q&A',true_false:'判断',choice:'选择',fill_blank:'填空',sequencing:'排序',matching:'配对',code:'代码',scenario:'场景',explain:'解释',comparison:'对比'};
+let activeTypeFilter = 'all';
+
+function renderTypeFilters() {
+  const container = $('#type-filters');
+  if (!container) return;
+  const types = new Set(DATA.cards.map(c => c.type || 'qa'));
+  if (types.size <= 1) { container.innerHTML = ''; return; }
+  const labels = [{t:'all',l:'All'}];
+  for (const t of types) labels.push({t, l: TYPE_LABELS[t] || t});
+  container.innerHTML = labels.map(({t,l}) => `<button class="type-btn ${t===activeTypeFilter?'active':''}" data-type="${t}">${l}</button>`).join('');
+  container.querySelectorAll('.type-btn').forEach(btn => {
+    btn.addEventListener('click', () => { activeTypeFilter = btn.dataset.type; renderTypeFilters(); renderCards(); });
+  });
+}
+
 function renderCards() {
   const deck = $('#card-deck');
   if (!deck) return;
+  renderTypeFilters();
   const allCards = getDueCards();
+  const filtered = activeTypeFilter === 'all' ? allCards : allCards.filter(c => (c.type || 'qa') === activeTypeFilter);
   const dueCount = allCards.filter(c => c.isDue).length;
   const info = $('#cards-due-info');
   if (info) info.textContent = `${dueCount} due today / ${allCards.length} total`;
 
-  deck.innerHTML = allCards.map((c, i) => {
+  deck.innerHTML = filtered.map((c, i) => {
+    const qtype = c.type || 'qa';
+    const label = TYPE_LABELS[qtype] || qtype;
+    const diff = '★'.repeat(c.difficulty || 3) + '☆'.repeat(5 - (c.difficulty || 3));
+    const header = `<div class="q-header"><span class="q-type">${label}</span><span class="q-diff">${diff}</span><span class="q-diff">Bloom: ${c.bloom_level||'?'}</span></div>`;
+    const srsBtns = `<div class="card-status"><button class="s-0" data-quality="0">Forgot</button><button class="s-1" data-quality="1">Hard</button><button class="s-2" data-quality="2">Good</button><button class="s-3" data-quality="3">Easy</button></div>`;
     const statusLabel = c.state.reviews === 0 ? 'New' : `Interval: ${c.state.interval}d`;
-    return `<div class="flash-card" data-idx="${i}">
-      <div class="card-inner">
-        <div class="card-front">
-          <div class="card-label">Q${i + 1}</div>
-          <div class="card-text">${escHtml(c.question)}</div>
-          <div style="font-size:.7rem;color:var(--fg3);margin-top:auto">${statusLabel}</div>
-        </div>
-        <div class="card-back">
-          <div class="card-label">A${i + 1}</div>
-          <div class="card-text">${escHtml(c.answer)}</div>
-          <div class="card-status">
-            <button class="s-0" data-quality="0">Forgot</button>
-            <button class="s-1" data-quality="1">Hard</button>
-            <button class="s-2" data-quality="2">Good</button>
-            <button class="s-3" data-quality="3">Easy</button>
-          </div>
-        </div>
-      </div>
+    let body = '';
+
+    if (qtype === 'qa') {
+      body = `<div class="q-stem">${escHtml(c.question)}</div><div class="q-explanation show" style="display:block"><strong>A:</strong> ${escHtml(c.answer)}</div>`;
+    } else if (qtype === 'true_false') {
+      body = `<div class="q-stem">${escHtml(c.statement||'')}</div>
+        <div class="q-options"><div class="q-opt" data-val="true">正确 / True</div><div class="q-opt" data-val="false">错误 / False</div></div>
+        <div class="q-explanation">${escHtml(c.explanation||'')}</div>`;
+    } else if (qtype === 'choice') {
+      body = `<div class="q-stem">${escHtml(c.question||'')}</div>
+        <div class="q-options">${(c.options||[]).map((o,j)=>`<div class="q-opt" data-val="${j}">${escHtml(o)}</div>`).join('')}</div>
+        <div class="q-explanation">${escHtml(c.explanation||'')}</div>`;
+    } else if (qtype === 'fill_blank') {
+      const tmpl = c.template || '';
+      let rendered = tmpl;
+      (c.blanks||[]).forEach((b, bi) => { rendered = rendered.replace('___', `<input class="q-blank-input" data-blank="${bi}" placeholder="___">`); });
+      body = `<div class="q-stem">${rendered}</div>
+        <div class="q-actions"><button class="q-check-blank">Check</button></div>
+        <div class="q-explanation">${(c.blanks||[]).map(b=>escHtml(b.answer||'')).join(', ')}</div>`;
+    } else if (qtype === 'sequencing') {
+      const items = (c.items||[]).map((it,j) => `<div class="q-seq-item" draggable="true" data-orig="${j}">${escHtml(it)}</div>`).join('');
+      body = `<div class="q-stem">Drag to reorder:</div><div class="q-seq-list">${items}</div>
+        <div class="q-actions"><button class="q-check-seq">Check Order</button></div>
+        <div class="q-explanation">Correct: ${(c.correct_order||[]).map(oi=>(c.items||[])[oi]).join(' → ')}</div>`;
+    } else if (qtype === 'matching') {
+      const pairs = c.pairs || [];
+      const lefts = pairs.map((p,j) => `<div class="q-match-item" data-side="left" data-idx="${j}">${escHtml(p.left)}</div>`).join('');
+      const rights = pairs.map((p,j) => `<div class="q-match-item" data-side="right" data-idx="${j}">${escHtml(p.right)}</div>`).join('');
+      body = `<div class="q-stem">Match pairs:</div><div class="q-match-grid"><div>${lefts}</div><div>${rights}</div></div>
+        <div class="q-actions"><button class="q-check-match">Check</button></div>`;
+    } else if (qtype === 'code') {
+      body = `<div class="q-stem">${escHtml(c.context||'')}</div>
+        <pre class="q-code">${escHtml(c.missing_code||'___')}</pre>
+        <textarea class="q-textarea q-code-answer" placeholder="Write the missing code..."></textarea>
+        <div class="q-actions"><button class="q-check-code">Show Answer</button></div>
+        <div class="q-explanation"><pre>${escHtml(c.answer||'')}</pre></div>`;
+    } else if (qtype === 'scenario') {
+      body = `<div class="q-stem"><strong>Scenario:</strong> ${escHtml(c.scenario||'')}</div>
+        <div class="q-stem">${escHtml(c.question||'')}</div>
+        <textarea class="q-textarea q-scenario-answer" placeholder="Write your answer..."></textarea>
+        <div class="q-actions"><button class="q-show-sample">Show Sample Answer</button></div>
+        <div class="q-explanation"><strong>Sample:</strong> ${escHtml(c.sample_answer||'')}</div>
+        <div class="q-key-points"><ul>${(c.key_points||[]).map(kp=>`<li>${escHtml(kp)}</li>`).join('')}</ul></div>`;
+    } else if (qtype === 'explain') {
+      body = `<div class="q-stem"><strong>${escHtml(c.concept||'')}</strong></div>
+        <div class="q-stem">${escHtml(c.prompt||'Explain in your own words')}</div>
+        <textarea class="q-textarea q-explain-answer" placeholder="Your explanation..."></textarea>
+        <div class="q-actions"><button class="q-show-criteria">Show Criteria</button></div>
+        <div class="q-explanation"><strong>Criteria:</strong> ${(c.evaluation_criteria||[]).map(cr=>escHtml(cr)).join(', ')}</div>`;
+    } else if (qtype === 'comparison') {
+      body = `<div class="q-stem">${escHtml(c.question||'Compare: '+(c.subjects||[]).join(' vs '))}</div>
+        <textarea class="q-textarea q-compare-answer" placeholder="Your comparison..."></textarea>
+        <div class="q-actions"><button class="q-show-compare-answer">Show Answer</button></div>
+        <div class="q-explanation">${escHtml(c.answer||'')}</div>`;
+    } else {
+      // Fallback: treat as QA
+      body = `<div class="q-stem">${escHtml(c.question||c.statement||'')}</div>
+        <div class="q-explanation show" style="display:block">${escHtml(c.answer||c.explanation||'')}</div>`;
+    }
+
+    return `<div class="q-card" data-idx="${c.idx}" data-type="${qtype}">
+      ${header}${body}
+      <div style="font-size:.7rem;color:var(--fg3);margin-top:6px">${statusLabel}</div>
+      ${srsBtns}
     </div>`;
   }).join('');
 
-  deck.querySelectorAll('.flash-card').forEach(card => {
-    card.addEventListener('click', e => {
-      if (e.target.closest('.card-status')) return;
-      card.classList.toggle('flipped');
-    });
+  // Wire up interactions
+  deck.querySelectorAll('.q-card').forEach(card => {
+    const idx = parseInt(card.dataset.idx);
+    // SRS buttons
     card.querySelectorAll('.card-status button').forEach(btn => {
-      btn.addEventListener('click', e => {
-        e.stopPropagation();
-        const idx = parseInt(card.dataset.idx);
+      btn.addEventListener('click', () => {
         const quality = parseInt(btn.dataset.quality);
         const srs = loadSRS();
         if (!srs[idx]) srs[idx] = initCardState(idx);
         sm2(srs[idx], quality);
         saveSRS(srs);
-        card.classList.remove('flipped');
-        setTimeout(() => renderCards(), 300);
+        setTimeout(() => renderCards(), 200);
+      });
+    });
+    // Choice / True-False click
+    card.querySelectorAll('.q-opt').forEach(opt => {
+      opt.addEventListener('click', () => {
+        if (opt.classList.contains('correct') || opt.classList.contains('wrong')) return;
+        const qtype = card.dataset.type;
+        const siblings = card.querySelectorAll('.q-opt');
+        siblings.forEach(s => s.classList.remove('selected'));
+        opt.classList.add('selected');
+        if (qtype === 'true_false') {
+          const correct = opt.dataset.val === String(card.querySelector('.q-card')?.dataset?.correct || '');
+          // For TF, just show explanation
+        } else if (qtype === 'choice') {
+          // Auto-check on click
+          const expl = card.querySelector('.q-explanation');
+          if (expl) expl.classList.add('show');
+        }
+      });
+    });
+    // Fill-blank check
+    card.querySelector('.q-check-blank')?.addEventListener('click', () => {
+      card.querySelectorAll('.q-blank-input').forEach(inp => {
+        const bi = parseInt(inp.dataset.blank);
+        const cardData = DATA.cards[idx];
+        const blanks = cardData.blanks || [];
+        const correct = blanks[bi]?.answer || '';
+        inp.classList.toggle('correct', inp.value.trim().toLowerCase() === correct.toLowerCase());
+        inp.classList.toggle('wrong', inp.value.trim().toLowerCase() !== correct.toLowerCase() && inp.value.trim());
+      });
+      const expl = card.querySelector('.q-explanation');
+      if (expl) expl.classList.add('show');
+    });
+    // Show explanation / answer buttons
+    card.querySelector('.q-check-code')?.addEventListener('click', () => { card.querySelector('.q-explanation')?.classList.add('show'); });
+    card.querySelector('.q-show-sample')?.addEventListener('click', () => { card.querySelector('.q-explanation')?.classList.add('show'); });
+    card.querySelector('.q-show-criteria')?.addEventListener('click', () => { card.querySelector('.q-explanation')?.classList.add('show'); });
+    card.querySelector('.q-show-compare-answer')?.addEventListener('click', () => { card.querySelector('.q-explanation')?.classList.add('show'); });
+    // Sequencing check
+    card.querySelector('.q-check-seq')?.addEventListener('click', () => {
+      const cardData = DATA.cards[idx];
+      const correctOrder = cardData.correct_order || [];
+      const items = card.querySelectorAll('.q-seq-item');
+      items.forEach((item, pos) => {
+        const origIdx = parseInt(item.dataset.orig);
+        item.classList.toggle('correct-pos', origIdx === correctOrder[pos]);
+        item.classList.toggle('wrong-pos', origIdx !== correctOrder[pos]);
+      });
+      card.querySelector('.q-explanation')?.classList.add('show');
+    });
+    // Drag and drop for sequencing
+    const seqList = card.querySelector('.q-seq-list');
+    if (seqList) {
+      let dragged = null;
+      seqList.querySelectorAll('.q-seq-item').forEach(item => {
+        item.addEventListener('dragstart', () => { dragged = item; item.classList.add('dragging'); });
+        item.addEventListener('dragend', () => { item.classList.remove('dragging'); dragged = null; });
+        item.addEventListener('dragover', e => { e.preventDefault(); });
+        item.addEventListener('drop', e => {
+          e.preventDefault();
+          if (dragged && dragged !== item) {
+            const parent = item.parentNode;
+            const items = [...parent.children];
+            const fromIdx = items.indexOf(dragged);
+            const toIdx = items.indexOf(item);
+            if (fromIdx < toIdx) parent.insertBefore(dragged, item.nextSibling);
+            else parent.insertBefore(dragged, item);
+          }
+        });
+      });
+    }
+    // Matching
+    let matchLeft = null, matchRight = null;
+    card.querySelectorAll('.q-match-item[data-side="left"]').forEach(item => {
+      item.addEventListener('click', () => {
+        if (item.classList.contains('matched')) return;
+        card.querySelectorAll('.q-match-item[data-side="left"]').forEach(i => i.classList.remove('selected'));
+        item.classList.add('selected');
+        matchLeft = parseInt(item.dataset.idx);
+        if (matchRight !== null) { matchLeft = null; matchRight = null; card.querySelectorAll('.q-match-item').forEach(i => i.classList.remove('selected')); }
+      });
+    });
+    card.querySelectorAll('.q-match-item[data-side="right"]').forEach(item => {
+      item.addEventListener('click', () => {
+        if (item.classList.contains('matched')) return;
+        matchRight = parseInt(item.dataset.idx);
+        if (matchLeft !== null) {
+          const correct = matchLeft === matchRight;
+          const lEl = card.querySelector(`.q-match-item[data-side="left"][data-idx="${matchLeft}"]`);
+          const rEl = card.querySelector(`.q-match-item[data-side="right"][data-idx="${matchRight}"]`);
+          if (correct && lEl && rEl) { lEl.classList.add('matched'); rEl.classList.add('matched'); }
+          matchLeft = null; matchRight = null;
+          card.querySelectorAll('.q-match-item').forEach(i => i.classList.remove('selected'));
+        }
       });
     });
   });
@@ -524,6 +802,27 @@ function renderTimeline() {
 renderTimeline();
 
 // ===== Transcript =====
+function segTimestampToSeconds(ts) {
+  if (!ts) return -1;
+  const parts = ts.split(':');
+  return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+}
+
+function findNearestFrame(segIdx) {
+  if (!DATA.frames || !DATA.frames.length || !DATA.transcriptSegments.length) return null;
+  const seg = DATA.transcriptSegments[segIdx];
+  const segSec = segTimestampToSeconds(seg.timestamp);
+  if (segSec < 0) return null;
+  let best = null, bestDist = Infinity;
+  for (const f of DATA.frames) {
+    const fSec = segTimestampToSeconds(f.timestamp);
+    if (fSec < 0) continue;
+    const dist = Math.abs(fSec - segSec);
+    if (dist < bestDist && dist <= 5) { bestDist = dist; best = f; }
+  }
+  return best;
+}
+
 function renderTranscript() {
   const body = $('#transcript-body');
   if (!body) return;
@@ -531,6 +830,8 @@ function renderTranscript() {
 
   body.innerHTML = DATA.transcriptSegments.map((seg, i) => {
     const note = notes[i];
+    const nearFrame = findNearestFrame(i);
+    const frameHtml = nearFrame ? `<div class="seg-frame"><img src="${nearFrame.data_uri}" alt="Frame at ${nearFrame.timestamp}"></div>` : '';
     return `<div class="transcript-seg" data-idx="${i}">
       <span class="seg-time">${seg.timestamp || ''}</span>
       <span class="seg-text">${escHtml(seg.text)}</span>

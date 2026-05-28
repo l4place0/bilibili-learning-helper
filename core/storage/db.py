@@ -1,4 +1,5 @@
 import json
+import logging
 import sqlite3
 import threading
 import uuid
@@ -214,6 +215,22 @@ class Storage:
         row = self._conn.execute(
             "SELECT * FROM tasks WHERE status = 'done' AND video_id = ? ORDER BY created_at DESC LIMIT 1",
             (video_id,),
+        ).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def get_tasks_by_group(self, group_id: str) -> list[dict]:
+        """Find all tasks belonging to a group (group_id stored in metadata JSON)."""
+        rows = self._conn.execute(
+            "SELECT * FROM tasks WHERE json_extract(metadata, '$.group_id') = ? ORDER BY created_at",
+            (group_id,),
+        ).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def get_group_synthesis(self, group_id: str) -> dict | None:
+        """Find the synthesis task for a group."""
+        row = self._conn.execute(
+            "SELECT * FROM tasks WHERE json_extract(metadata, '$.synthesis_for') = ? LIMIT 1",
+            (group_id,),
         ).fetchone()
         return self._row_to_dict(row) if row else None
 

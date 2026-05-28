@@ -18,6 +18,10 @@ class LocalASR(BaseASR):
         self.timeout = timeout
 
     def transcribe(self, audio_path: Path, language: str = "zh") -> str:
+        text, _ = self.transcribe_segments(audio_path, language)
+        return text
+
+    def transcribe_segments(self, audio_path: Path, language: str = "zh") -> tuple[str, list[dict]]:
         logger.info("Calling ASR service at %s for %s", self.endpoint, audio_path.name)
         with open(audio_path, "rb") as f:
             resp = httpx.post(
@@ -29,5 +33,6 @@ class LocalASR(BaseASR):
         resp.raise_for_status()
         data = resp.json()
         transcript = data.get("transcript", "")
-        logger.info("ASR service returned %d chars", len(transcript))
-        return transcript
+        segments = data.get("segments", [])
+        logger.info("ASR service returned %d chars, %d segments", len(transcript), len(segments))
+        return transcript, segments

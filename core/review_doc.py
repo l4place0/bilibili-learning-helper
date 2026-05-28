@@ -11,7 +11,7 @@ from core.config import settings
 def parse_review_cards(summary: str) -> list[dict]:
     """Extract Q&A cards from the '## 复习卡片' / '## Review Cards' section of a summary.
 
-    Returns a list of {"question": str, "answer": str} dicts.
+    Returns a list of {"question": str, "answer": str} dicts (legacy format).
     Returns empty list if the section is missing or no cards are found.
     """
     # Find the review cards section
@@ -30,7 +30,9 @@ def parse_review_cards(summary: str) -> list[dict]:
 
     # Match by index, truncate to shortest
     common_ids = sorted(set(questions.keys()) & set(answers.keys()))
-    return [{"question": questions[i], "answer": answers[i]} for i in common_ids]
+    return [{"type": "qa", "question": questions[i], "answer": answers[i],
+             "difficulty": 3, "bloom_level": "understand", "source_refs": [], "id": f"qa_{i}"}
+            for i in common_ids]
 
 
 def encode_frames(task_id: str, duration: float | None = None) -> list[dict]:
@@ -47,8 +49,12 @@ def encode_frames(task_id: str, duration: float | None = None) -> list[dict]:
 
     frame_files = sorted(frames_dir.glob("frame_*.jpg"))
     if not frame_files:
+        frame_files = sorted(frames_dir.glob("frame_*.webp"))
+    if not frame_files:
+        frame_files = sorted(frames_dir.glob("frame_*.*"))
+    if not frame_files:
         frame_files = sorted(
-            list(frames_dir.glob("*.jpg")) + list(frames_dir.glob("*.png"))
+            list(frames_dir.glob("*.jpg")) + list(frames_dir.glob("*.png")) + list(frames_dir.glob("*.webp"))
         )
 
     total = len(frame_files)
@@ -88,27 +94,46 @@ def generate_review_doc(task: dict, cards: list[dict], frames: list[dict]) -> st
     env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)
     template = env.get_template("review_doc.html")
 
-    # Parse transcript into segments
-    transcript = task.get("transcript", "") or ""
-    transcript_segments = _parse_transcript_segments(transcript)
+    # Use structured segments from metadata if available, otherwise parse from text
+    metadata = task.get("metadata") or {}
+    raw_segments = metadata.get("transcript_segments", [])
+    if raw_segments:
+        transcript_segments = [
+            {"index": i, "timestamp": _format_seg_timestamp(seg["start"]), "text": seg["text"]}
+            for i, seg in enumerate(raw_segments)
+        ]
+    else:
+        transcript = task.get("transcript", "") or ""
+        transcript_segments = _parse_transcript_segments(transcript)
+
+    # Merge legacy Q&A cards with structured questions from metadata
+    all_questions = list(cards)  # Legacy Q&A cards (already parsed)
+    meta_questions = metadata.get("questions", [])
+    if meta_questions:
+        all_questions.extend(meta_questions)
 
     # Build data for JS injection
     review_data = {
         "taskId": task.get("task_id", ""),
-        "title": task.get("metadata", {}).get("title", "Untitled"),
+        "title": metadata.get("title", "Untitled"),
         "url": task.get("url", ""),
         "platform": task.get("platform", ""),
         "summary": task.get("summary", ""),
         "transcriptSegments": transcript_segments,
-        "cards": cards,
+        "cards": all_questions,
         "frames": frames,
-        "metadata": task.get("metadata", {}),
+        "metadata": metadata,
     }
 
     return template.render(
         review_data_json=json.dumps(review_data, ensure_ascii=False),
         review_data=review_data,
     )
+
+
+def _format_seg_timestamp(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}:{s:02d}"
 
 
 def _parse_transcript_segments(transcript: str) -> list[dict]:

@@ -119,3 +119,24 @@ class FavoriteRequest(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "0.1.0"
+
+
+class GroupSummarizeRequest(BaseModel):
+    urls: list[str] = Field(min_length=2, max_length=10)
+    language: LanguageEnum = LanguageEnum.ZH
+    llm_provider: LLMProviderEnum = LLMProviderEnum.OPENAI
+    detail: DetailEnum = DetailEnum.NORMAL
+    mode: ModeEnum = ModeEnum.MULTIMODAL
+
+
+class GroupSummarizeResponse(BaseModel):
+    group_id: str
+    task_ids: list[str]
+    skipped: list[str] = []
+
+
+class GroupStatusResponse(BaseModel):
+    group_id: str
+    status: str  # pending / partial / complete / failed
+    tasks: list[TaskListItem]
+    synthesis: Optional[TaskListItem] = None

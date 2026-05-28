@@ -14,6 +14,9 @@ from core.models import (
     BatchSummarizeResponse,
     BatchTaskItem,
     FavoriteRequest,
+    GroupSummarizeRequest,
+    GroupSummarizeResponse,
+    GroupStatusResponse,
     HealthResponse,
     StorageCleanupResult,
     StorageInfo,
@@ -93,6 +96,96 @@ async def summarize_batch(req: BatchSummarizeRequest):
         created.append(BatchTaskItem(task_id=task_id, url=url, status=TaskStatus.PENDING))
 
     return BatchSummarizeResponse(tasks=created, skipped=skipped)
+
+
+@router.post("/api/summarize/group", response_model=GroupSummarizeResponse, status_code=202)
+async def summarize_group(req: GroupSummarizeRequest):
+    """Submit multiple URLs as a group for combined analysis."""
+    import uuid
+    group_id = str(uuid.uuid4())[:8]
+    created = []
+    skipped = []
+
+    for raw_url in req.urls:
+        raw_url = raw_url.strip()
+        if not raw_url:
+            continue
+        url = _extract_url(raw_url)
+        try:
+            get_platform(url)
+        except ValueError:
+            skipped.append(raw_url)
+            continue
+
+        task_id = db.create_task(url, platform="unknown")
+        # Store group_id in metadata
+        meta = {"group_id": group_id}
+        db.update_task(task_id, metadata=meta)
+
+        thread = threading.Thread(
+            target=run_pipeline,
+            args=(task_id, url, req.language, req.llm_provider, req.detail, req.mode),
+            daemon=True,
+        )
+        thread.start()
+        created.append(task_id)
+
+    return GroupSummarizeResponse(group_id=group_id, task_ids=created, skipped=skipped)
+
+
+@router.get("/api/groups/{group_id}", response_model=GroupStatusResponse)
+async def get_group_status(group_id: str):
+    """Get group status including individual tasks and synthesis result."""
+    tasks = db.get_tasks_by_group(group_id)
+    if not tasks:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    task_items = [
+        TaskListItem(
+            task_id=t["task_id"],
+            url=t["url"],
+            platform=t["platform"],
+            status=t["status"],
+            created_at=t["created_at"],
+            metadata=t.get("metadata"),
+            favorite=t.get("favorite", False),
+            progress=t.get("progress") or 0,
+        )
+        for t in tasks
+    ]
+
+    # Determine group status
+    statuses = [t["status"] for t in tasks]
+    if all(s == "done" for s in statuses):
+        group_status = "complete"
+    elif any(s == "failed" for s in statuses) and not any(s in ("pending", "downloading", "transcribing", "summarizing") for s in statuses):
+        group_status = "partial"
+    elif any(s in ("pending", "downloading", "transcribing", "summarizing") for s in statuses):
+        group_status = "pending"
+    else:
+        group_status = "partial"
+
+    # Check for synthesis
+    synthesis_task = db.get_group_synthesis(group_id)
+    synthesis_item = None
+    if synthesis_task:
+        synthesis_item = TaskListItem(
+            task_id=synthesis_task["task_id"],
+            url=synthesis_task["url"],
+            platform=synthesis_task["platform"],
+            status=synthesis_task["status"],
+            created_at=synthesis_task["created_at"],
+            metadata=synthesis_task.get("metadata"),
+            favorite=synthesis_task.get("favorite", False),
+            progress=synthesis_task.get("progress") or 0,
+        )
+
+    return GroupStatusResponse(
+        group_id=group_id,
+        status=group_status,
+        tasks=task_items,
+        synthesis=synthesis_item,
+    )
 
 
 @router.get("/api/tasks", response_model=TaskListResponse)
@@ -520,3 +613,64 @@ async def update_cookies(body: dict):
     from core.platforms.bilibili import BilibiliPlatform
     status = BilibiliPlatform.check_cookies()
     return {"status": status, "message": "Cookies updated"}
+
+
+@router.get("/api/metrics")
+async def prometheus_metrics():
+    """Return Prometheus-compatible metrics."""
+    from core.observability.metrics import metrics_text
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(content=metrics_text(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@router.get("/api/tasks/{task_id}/evidence")
+async def get_task_evidence(task_id: str):
+    """Return the evidence chain for a task."""
+    _get_task_or_404(task_id)
+    from core.observability.evidence import get_evidence
+    return {"task_id": task_id, "evidence": get_evidence(task_id)}
+
+
+# ============================================================
+# GitHub Pages publish endpoints
+# ============================================================
+
+@router.get("/api/publish/status")
+async def publish_status():
+    """Return publish configuration status."""
+    from core.github.publisher import get_publish_status
+    from core.storage.db import get_storage
+    status = get_publish_status()
+    # Count published tasks
+    storage = get_storage()
+    tasks = storage.list_tasks_light()
+    published_count = sum(1 for t in tasks if (t.get("metadata") or {}).get("publish_url"))
+    status["published_count"] = published_count
+    return status
+
+
+@router.post("/api/publish", status_code=200)
+async def publish_reviews(body: dict):
+    """Publish review docs to GitHub Pages. Body: { task_ids: [...] }"""
+    task_ids = body.get("task_ids", [])
+    if not task_ids:
+        raise HTTPException(status_code=400, detail="task_ids is required")
+
+    from core.github.publisher import PublishError, publish_reviews as _publish
+    try:
+        result = _publish(task_ids)
+    except PublishError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return result
+
+
+@router.delete("/api/publish/{task_id}")
+async def unpublish_review(task_id: str):
+    """Remove a published review from GitHub Pages."""
+    from core.github.publisher import PublishError, unpublish_review as _unpublish
+    try:
+        result = _unpublish(task_id)
+    except PublishError as e:
+        status = 404 if "never published" in str(e).lower() else 400
+        raise HTTPException(status_code=status, detail=str(e))
+    return result

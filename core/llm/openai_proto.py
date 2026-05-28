@@ -60,9 +60,9 @@ class OpenAILLM(BaseLLM):
         )
         return response.choices[0].message.content
 
-    def summarize(self, transcript: str, lang: str = "zh", detail: str = "normal", content_type: str | None = None) -> str:
+    def summarize(self, transcript: str, lang: str = "zh", detail: str = "normal", content_type: str | None = None, has_segments: bool = False) -> str:
         from core.llm.prompts import DETAIL_MAX_TOKENS
-        prompt = get_summary_prompt(content_type or "general", lang, multimodal=False, detail=detail).format(transcript=transcript)
+        prompt = get_summary_prompt(content_type or "general", lang, multimodal=False, detail=detail, has_segments=has_segments).format(transcript=transcript)
         max_tokens = DETAIL_MAX_TOKENS.get(detail, 4096)
         logger.info("Summarizing with OpenAI (%s, type=%s, detail=%s)", settings.openai_model, content_type, detail)
         summary = self._chat(prompt, max_tokens=max_tokens)
@@ -72,24 +72,25 @@ class OpenAILLM(BaseLLM):
     def summarize_multimodal(
         self, transcript: str, video_path: Path, lang: str = "zh", detail: str = "normal",
         content_type: str | None = None, prefetched_frames: list[Path] | None = None,
+        has_segments: bool = False,
     ) -> str:
         # Strategy 1: Extract frames and send as images (primary)
         try:
-            return self._summarize_with_frames(transcript, video_path, lang, content_type, prefetched_frames)
+            return self._summarize_with_frames(transcript, video_path, lang, content_type, prefetched_frames, has_segments=has_segments)
         except Exception as e:
             logger.warning("Frame-based summarization failed: %s, trying native video", e)
 
         # Strategy 2: Native video via video_url (fallback)
         try:
-            return self._summarize_native_video(transcript, video_path, lang, content_type)
+            return self._summarize_native_video(transcript, video_path, lang, content_type, has_segments=has_segments)
         except Exception as e:
             logger.warning("Native video summarization failed: %s, falling back to text-only", e)
 
         # Strategy 3: Text-only (final fallback)
-        return self.summarize(transcript, lang, content_type=content_type)
+        return self.summarize(transcript, lang, content_type=content_type, has_segments=has_segments)
 
-    def _summarize_native_video(self, transcript: str, video_path: Path, lang: str, content_type: str | None) -> str:
-        prompt = get_summary_prompt(content_type or "general", lang, multimodal=True).format(transcript=transcript)
+    def _summarize_native_video(self, transcript: str, video_path: Path, lang: str, content_type: str | None, has_segments: bool = False) -> str:
+        prompt = get_summary_prompt(content_type or "general", lang, multimodal=True, has_segments=has_segments).format(transcript=transcript)
 
         video_data = video_path.read_bytes()
         b64 = base64.b64encode(video_data).decode()
@@ -116,8 +117,8 @@ class OpenAILLM(BaseLLM):
         return summary
 
     def _summarize_with_frames(self, transcript: str, video_path: Path, lang: str, content_type: str | None,
-                                prefetched_frames: list[Path] | None = None) -> str:
-        prompt = get_summary_prompt(content_type or "general", lang, multimodal=True).format(transcript=transcript)
+                                prefetched_frames: list[Path] | None = None, has_segments: bool = False) -> str:
+        prompt = get_summary_prompt(content_type or "general", lang, multimodal=True, has_segments=has_segments).format(transcript=transcript)
 
         if prefetched_frames:
             frames = prefetched_frames
@@ -125,7 +126,8 @@ class OpenAILLM(BaseLLM):
         else:
             frames = extract_frames(
                 video_path,
-                max_frames=settings.max_frames,
+                max_frames=0,
+                mode="hybrid",
                 interval=settings.frame_interval,
             )
         if not frames:
@@ -134,9 +136,10 @@ class OpenAILLM(BaseLLM):
         content: list[dict] = []
         for frame in frames:
             b64 = base64.b64encode(frame.read_bytes()).decode()
+            media_type = "image/webp" if frame.suffix == ".webp" else "image/jpeg"
             content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                "image_url": {"url": f"data:{media_type};base64,{b64}"},
             })
         content.append({"type": "text", "text": prompt})
 

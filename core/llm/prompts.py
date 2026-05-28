@@ -331,6 +331,28 @@ MULTIMODAL_SUFFIX = {
     "en": "\n\nIn your analysis, incorporate visual content from the video (e.g., whiteboard notes, charts, code interfaces).",
 }
 
+# Citation instruction — appended to all summary prompts
+CITATION_INSTRUCTION = {
+    "zh": """
+
+【引用规则】
+转录文本已按段落编号（如 [S0 @00:00]、[S1 @00:15]）。请在总结中为每个关键事实标注来源段落：
+- 单段引用：[S12]
+- 连续段引用：[S12-S15]
+- 离散段引用：[S12,S15]
+引用放在句末。概括性语句和结论可不标注引用。
+如有视频画面信息（如代码截图、架构图、白板内容），请用 [F@MM:SS] 标注对应的画面时间点。""",
+    "en": """
+
+[Citation Rules]
+The transcript is segmented with IDs (e.g., [S0 @00:00], [S1 @00:15]). Cite source segments for each factual claim:
+- Single segment: [S12]
+- Range: [S12-S15]
+- Multiple: [S12,S15]
+Place citations at end of sentence. General statements and conclusions may omit citations.
+If referencing visual content (code screenshots, diagrams, whiteboard), cite the frame timestamp as [F@MM:SS].""",
+}
+
 # Review cards suffix — appended to all summary prompts
 REVIEW_CARDS_SUFFIX = {
     "zh": """
@@ -395,7 +417,7 @@ def _get_review_cards_suffix(lang: str = "zh") -> str:
     return custom or REVIEW_CARDS_SUFFIX.get(lang, REVIEW_CARDS_SUFFIX["zh"])
 
 
-def get_summary_prompt(content_type: str, lang: str = "zh", multimodal: bool = False, detail: str = "normal") -> str:
+def get_summary_prompt(content_type: str, lang: str = "zh", multimodal: bool = False, detail: str = "normal", has_segments: bool = False) -> str:
     # Check custom store first
     from core.llm.prompt_store import get_prompt_store
     custom = get_prompt_store().get_summary(content_type, lang)
@@ -403,6 +425,8 @@ def get_summary_prompt(content_type: str, lang: str = "zh", multimodal: bool = F
         if multimodal:
             suffix = MULTIMODAL_SUFFIX.get(lang, MULTIMODAL_SUFFIX["zh"])
             custom += suffix
+        if has_segments:
+            custom += CITATION_INSTRUCTION.get(lang, CITATION_INSTRUCTION["zh"])
         custom += _get_review_cards_suffix(lang)
         return custom
     type_prompts = SUMMARY_PROMPTS.get(content_type, SUMMARY_PROMPTS["general"])
@@ -413,17 +437,209 @@ def get_summary_prompt(content_type: str, lang: str = "zh", multimodal: bool = F
     # Append detail instructions
     detail_instr = DETAIL_INSTRUCTIONS.get(detail, DETAIL_INSTRUCTIONS["normal"])
     prompt += detail_instr.get(lang, detail_instr["zh"])
+    # Append citation instruction if segments are available
+    if has_segments:
+        prompt += CITATION_INSTRUCTION.get(lang, CITATION_INSTRUCTION["zh"])
     # Append review cards suffix
     prompt += _get_review_cards_suffix(lang)
     return prompt
 
 
 DETAIL_MAX_TOKENS = {
-    "brief": 1024,
-    "normal": 4096,
-    "detailed": 10240,
+    "brief": 2048,
+    "normal": 8192,
+    "detailed": 20480,
 }
 
 
 # All known content types for validation
 CONTENT_TYPES = {"tutorial", "tech_talk", "demo", "review", "news", "vlog", "general"}
+
+# ============================================================
+# Stage 3: Question generation
+# ============================================================
+
+QUESTION_GENERATION_PROMPT = {
+    "zh": """你是一个学习评估专家。根据以下视频总结和转录文本，生成 15-20 道不同类型的复习题。
+
+要求题型分布：
+__QUESTION_TYPES__
+
+每道题必须包含以下字段：
+- id: 唯一标识（简短字符串）
+- type: 题型（__TYPE_LIST__）
+- difficulty: 难度 1-5
+- bloom_level: 认知层次（remember/understand/apply/analyze/evaluate/create）
+- source_refs: 来源转录段落 ID 列表（如 ["S3", "S5-S8"]）
+
+各题型扩展字段：
+- qa: {"question": "...", "answer": "..."}
+- true_false: {"statement": "...", "correct": true/false, "explanation": "..."}
+- choice: {"question": "...", "options": ["A", "B", "C", "D"], "correct_index": 0, "explanation": "..."}
+- fill_blank: {"template": "___是___的关键", "blanks": [{"position": 0, "answer": "关键词"}]}
+- sequencing: {"items": ["步骤1", "步骤2", "步骤3"], "correct_order": [0, 1, 2]}
+- matching: {"pairs": [{"left": "概念A", "right": "定义A"}, {"left": "概念B", "right": "定义B"}]}
+- code: {"context": "def func():\\n    ...", "missing_code": "关键代码", "answer": "答案代码", "language": "python"}
+- scenario: {"scenario": "场景描述", "question": "问题", "sample_answer": "参考答案", "key_points": ["要点1", "要点2"]}
+- explain: {"concept": "概念名", "prompt": "请用自己的话解释...", "evaluation_criteria": ["标准1", "标准2"]}
+- comparison: {"subjects": ["概念A", "概念B"], "question": "比较异同", "answer": "对比分析"}
+
+只返回 JSON 数组，不要其他内容。
+
+[视频总结]
+__SUMMARY__
+
+[转录文本片段]
+__TRANSCRIPT__""",
+    "en": """You are a learning assessment expert. Based on the following video summary and transcript, generate 15-20 review questions of various types.
+
+Question type distribution:
+__QUESTION_TYPES__
+
+Each question must include:
+- id: unique identifier (short string)
+- type: question type (__TYPE_LIST__)
+- difficulty: 1-5
+- bloom_level: cognitive level (remember/understand/apply/analyze/evaluate/create)
+- source_refs: source transcript segment IDs (e.g., ["S3", "S5-S8"])
+
+Type-specific fields:
+- qa: {"question": "...", "answer": "..."}
+- true_false: {"statement": "...", "correct": true/false, "explanation": "..."}
+- choice: {"question": "...", "options": ["A", "B", "C", "D"], "correct_index": 0, "explanation": "..."}
+- fill_blank: {"template": "___is the key to___", "blanks": [{"position": 0, "answer": "keyword"}]}
+- sequencing: {"items": ["Step 1", "Step 2", "Step 3"], "correct_order": [0, 1, 2]}
+- matching: {"pairs": [{"left": "Concept A", "right": "Definition A"}, {"left": "Concept B", "right": "Definition B"}]}
+- code: {"context": "def func():\\n    ...", "missing_code": "key code", "answer": "answer code", "language": "python"}
+- scenario: {"scenario": "description", "question": "question", "sample_answer": "reference answer", "key_points": ["point1", "point2"]}
+- explain: {"concept": "concept name", "prompt": "Explain in your own words...", "evaluation_criteria": ["criterion1", "criterion2"]}
+- comparison: {"subjects": ["Concept A", "Concept B"], "question": "Compare and contrast", "answer": "analysis"}
+
+Return JSON array only, no other content.
+
+[Video Summary]
+__SUMMARY__
+
+[Transcript Excerpt]
+__TRANSCRIPT__""",
+}
+
+QUESTION_TYPE_DISTRIBUTION = {
+    "tutorial": {
+        "zh": "填空题 4-5 道、代码补全 2-3 道、排序题 2-3 道、场景题 2-3 道、Q&A 3-4 道",
+        "en": "4-5 fill_blank, 2-3 code, 2-3 sequencing, 2-3 scenario, 3-4 qa",
+    },
+    "tech_talk": {
+        "zh": "选择题 4-5 道、对比题 2-3 道、解释题 3-4 道、判断题 2-3 道、Q&A 2-3 道",
+        "en": "4-5 choice, 2-3 comparison, 3-4 explain, 2-3 true_false, 2-3 qa",
+    },
+    "demo": {
+        "zh": "排序题 3-4 道、场景题 3-4 道、填空题 3-4 道、Q&A 3-4 道",
+        "en": "3-4 sequencing, 3-4 scenario, 3-4 fill_blank, 3-4 qa",
+    },
+    "review": {
+        "zh": "对比题 4-5 道、选择题 3-4 道、场景题 2-3 道、Q&A 3-4 道",
+        "en": "4-5 comparison, 3-4 choice, 2-3 scenario, 3-4 qa",
+    },
+    "news": {
+        "zh": "判断题 4-5 道、选择题 3-4 道、解释题 2-3 道、Q&A 3-4 道",
+        "en": "4-5 true_false, 3-4 choice, 2-3 explain, 3-4 qa",
+    },
+    "vlog": {
+        "zh": "Q&A 5-6 道、判断题 3-4 道、解释题 3-4 道",
+        "en": "5-6 qa, 3-4 true_false, 3-4 explain",
+    },
+    "general": {
+        "zh": "选择题 4-5 道、填空题 3-4 道、解释题 3-4 道、Q&A 3-4 道",
+        "en": "4-5 choice, 3-4 fill_blank, 3-4 explain, 3-4 qa",
+    },
+}
+
+
+def get_question_generation_prompt(content_type: str, lang: str = "zh") -> str:
+    """Get the prompt for generating questions from a summary."""
+    prompt = QUESTION_GENERATION_PROMPT.get(lang, QUESTION_GENERATION_PROMPT["zh"])
+    distribution = QUESTION_TYPE_DISTRIBUTION.get(content_type, QUESTION_TYPE_DISTRIBUTION["general"])
+    dist_text = distribution.get(lang, distribution["zh"])
+    type_list = "qa, true_false, choice, fill_blank, sequencing, matching, code, scenario, explain, comparison"
+    return (prompt
+            .replace("__QUESTION_TYPES__", dist_text)
+            .replace("__TYPE_LIST__", type_list)
+            .replace("__SUMMARY__", "{summary}")
+            .replace("__TRANSCRIPT__", "{transcript}"))
+
+
+# ============================================================
+# Stage 4: Multi-source synthesis
+# ============================================================
+
+SYNTHESIS_PROMPT = {
+    "zh": """你是一个学习整合专家。请根据以下 {n} 个视频的总结和转录片段，生成一份综合学习分析文档。
+
+按以下格式输出：
+
+## 统一理解
+整合所有视频的核心知识，形成对这个主题的完整理解。标注各来源 [视频1] [视频2] [视频3]。
+
+## 各视角独特贡献
+列出每个视频独特覆盖的内容：
+- 视频1 特有: ...
+- 视频2 特有: ...
+- 视频3 特有: ...
+
+## 共识与分歧
+- 三方一致: ...
+- 观点分歧: ...（附各自论据）
+- 互补之处: ...
+
+## 最佳实践提炼
+从所有来源中提炼的最优方法或建议。
+
+## 综合复习卡片
+生成 5-8 组跨视频的复习卡片，覆盖需要综合多个来源才能理解的知识点。
+
+**Q1:** （跨视频综合问题）
+**A1:** （综合答案）
+
+[各视频总结]
+{summaries}
+
+[转录文本片段]
+{transcripts}""",
+    "en": """You are a learning integration expert. Based on the following {n} video summaries and transcript excerpts, generate a comprehensive learning analysis document.
+
+Output format:
+
+## Unified Understanding
+Integrate core knowledge from all videos into a complete understanding of this topic. Cite sources [Video1] [Video2] [Video3].
+
+## Unique Contributions
+List what each video uniquely covers:
+- Video 1 unique: ...
+- Video 2 unique: ...
+- Video 3 unique: ...
+
+## Consensus & Disagreement
+- All agree: ...
+- Disagreements: ... (with evidence from each)
+- Complementary: ...
+
+## Best Practices
+Optimal approaches or recommendations distilled from all sources.
+
+## Synthesis Review Cards
+Generate 5-8 cross-source review cards covering knowledge that requires synthesizing multiple sources.
+
+**Q1:** (cross-source synthesis question)
+**A1:** (synthesized answer)
+
+[Video Summaries]
+{summaries}
+
+[Transcript Excerpts]
+{transcripts}""",
+}
+
+
+def get_synthesis_prompt(lang: str = "zh") -> str:
+    return SYNTHESIS_PROMPT.get(lang, SYNTHESIS_PROMPT["zh"])

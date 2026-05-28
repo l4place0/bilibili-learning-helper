@@ -37,30 +37,34 @@ class ClaudeLLM(BaseLLM):
         )
         return message.content[0].text
 
-    def summarize(self, transcript: str, lang: str = "zh", detail: str = "normal", content_type: str | None = None) -> str:
-        prompt = get_summary_prompt(content_type or "general", lang, multimodal=False).format(transcript=transcript)
+    def summarize(self, transcript: str, lang: str = "zh", detail: str = "normal", content_type: str | None = None, has_segments: bool = False) -> str:
+        prompt = get_summary_prompt(content_type or "general", lang, multimodal=False, has_segments=has_segments).format(transcript=transcript)
         logger.info("Summarizing with Claude (%s, type=%s)", settings.claude_model, content_type)
         summary = self._chat(prompt, max_tokens=4096)
         logger.info("Summary done: %d chars", len(summary))
         return summary
 
     def summarize_multimodal(
-        self, transcript: str, video_path: Path, lang: str = "zh", detail: str = "normal", content_type: str | None = None
+        self, transcript: str, video_path: Path, lang: str = "zh", detail: str = "normal",
+        content_type: str | None = None, prefetched_frames: list[Path] | None = None,
+        has_segments: bool = False,
     ) -> str:
-        prompt = get_summary_prompt(content_type or "general", lang, multimodal=True).format(transcript=transcript)
+        prompt = get_summary_prompt(content_type or "general", lang, multimodal=True, has_segments=has_segments).format(transcript=transcript)
 
         frames = extract_frames(
             video_path,
-            max_frames=settings.max_frames,
+            max_frames=0,
+            mode="hybrid",
             interval=settings.frame_interval,
         )
 
         content: list[dict] = []
         for frame in frames:
             b64 = base64.b64encode(frame.read_bytes()).decode()
+            media_type = "image/webp" if frame.suffix == ".webp" else "image/jpeg"
             content.append({
                 "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+                "source": {"type": "base64", "media_type": media_type, "data": b64},
             })
         content.append({"type": "text", "text": prompt})
 
