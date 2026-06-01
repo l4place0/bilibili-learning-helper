@@ -38,9 +38,11 @@ class ClaudeLLM(BaseLLM):
         return message.content[0].text
 
     def summarize(self, transcript: str, lang: str = "zh", detail: str = "normal", content_type: str | None = None, has_segments: bool = False) -> str:
+        from core.llm.prompts import DETAIL_MAX_TOKENS
         prompt = get_summary_prompt(content_type or "general", lang, multimodal=False, has_segments=has_segments).format(transcript=transcript)
-        logger.info("Summarizing with Claude (%s, type=%s)", settings.claude_model, content_type)
-        summary = self._chat(prompt, max_tokens=4096)
+        max_tokens = DETAIL_MAX_TOKENS.get(detail, 4096)
+        logger.info("Summarizing with Claude (%s, type=%s, detail=%s)", settings.claude_model, content_type, detail)
+        summary = self._chat(prompt, max_tokens=max_tokens)
         logger.info("Summary done: %d chars", len(summary))
         return summary
 

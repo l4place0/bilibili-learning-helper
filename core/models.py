@@ -12,6 +12,7 @@ class TaskStatus(str, Enum):
     EXTRACTING_FRAMES = "extracting_frames"
     CLASSIFYING = "classifying"
     SUMMARIZING = "summarizing"
+    GENERATING_THREE_STAGE = "generating_three_stage"
     DONE = "done"
     FAILED = "failed"
 

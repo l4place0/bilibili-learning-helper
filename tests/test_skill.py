@@ -22,7 +22,7 @@ SETTINGS_TARGETS = [
 ]
 
 MOCK_DOWNLOAD = "core.platforms.bilibili.BilibiliPlatform.download"
-MOCK_TRANSCRIBE = "core.pipeline.transcribe"
+MOCK_GET_ASR = "core.pipeline.get_asr"
 MOCK_GET_LLM = "core.pipeline.get_llm"
 
 
@@ -41,6 +41,8 @@ def _make_settings(tmp_dir):
     s.openai_api_key = "test-key"
     s.openai_base_url = "http://test"
     s.anthropic_base_url = ""
+    s.asr_provider = "inprocess"
+    s.auto_cleanup_days = 7
     for d in [s.data_dir, s.cache_dir, s.audio_dir, s.transcript_dir]:
         d.mkdir(parents=True, exist_ok=True)
     return s
@@ -55,8 +57,11 @@ def _mock_download(url, output_dir, keep_video=False):
     return audio_path, {"title": "Test Video Title", "duration": 125, "video_id": video_id}, None
 
 
-def _mock_transcribe(audio_path, language="zh"):
-    return "这是一段测试转录文本内容。"
+def _make_mock_asr(transcript="这是一段测试转录文本内容。"):
+    asr = MagicMock()
+    asr.transcribe.return_value = transcript
+    asr.transcribe_segments.return_value = (transcript, [{"start": 0.0, "end": 5.0, "text": transcript}])
+    return asr
 
 
 def _make_mock_llm(summary="这是一个测试视频摘要。"):
@@ -64,6 +69,12 @@ def _make_mock_llm(summary="这是一个测试视频摘要。"):
     llm.classify.return_value = {"summary": "test", "type": "general"}
     llm.summarize.return_value = summary
     llm.summarize_multimodal.return_value = summary
+    llm.summarize_stream.return_value = iter([summary])
+    llm.generate_three_stage.return_value = {
+        "preview": {"overview": "测试概述", "questions": ["问题1"], "pre_quiz": []},
+        "index": [{"time_seconds": 30, "time_display": "00:30", "label": "要点", "detail": "说明"}],
+        "summary": {"text": summary, "cards": [], "post_quiz": [], "weak_points": []},
+    }
     return llm
 
 
@@ -92,6 +103,8 @@ def server(tmp_path):
 
     import core.api.routes as routes
     from core.storage.db import Storage
+    import core.storage.db as db_mod
+    db_mod._instance = None
     routes.db = Storage(db_path=tmp_path / "test.db")
 
     app = __import__("core.main", fromlist=["app"]).app
@@ -115,6 +128,7 @@ def server(tmp_path):
     srv.should_exit = True
     for p in patches:
         p.stop()
+    db_mod._instance = None
 
 
 # === summarize.sh tests ===
@@ -145,7 +159,7 @@ def test_summarize_invalid_url(server):
 
 def test_summarize_no_poll(server, tmp_path):
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=_make_mock_llm()):
 
         r = _run(
@@ -162,7 +176,7 @@ def test_summarize_no_poll(server, tmp_path):
 
 def test_summarize_full_flow(server):
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=_make_mock_llm()):
 
         r = _run(
@@ -179,7 +193,7 @@ def test_summarize_full_flow(server):
 
 def test_summarize_with_options(server):
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=_make_mock_llm()):
 
         r = _run(
@@ -212,7 +226,7 @@ def test_status_running(server):
 
 def test_status_with_tasks(server):
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=_make_mock_llm()):
 
         _run(
@@ -229,7 +243,7 @@ def test_status_with_tasks(server):
 
 def test_status_task_detail(server):
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=_make_mock_llm()):
 
         r = _run(

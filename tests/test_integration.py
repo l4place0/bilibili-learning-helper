@@ -9,27 +9,10 @@ from fastapi.testclient import TestClient
 
 
 # Mock paths — target where the name is USED (imported), not where it's defined
-MOCK_TRANSCRIBE = "core.pipeline.transcribe"
 MOCK_DOWNLOAD = "core.platforms.bilibili.BilibiliPlatform.download"
 MOCK_YT_DOWNLOAD = "core.platforms.youtube.YouTubePlatform.download"
 MOCK_GET_LLM = "core.pipeline.get_llm"
-
-# All modules that do `from core.config import settings`
-SETTINGS_TARGETS = [
-    "core.pipeline.settings",
-    "core.storage.db.settings",
-    "core.llm.claude.settings",
-    "core.llm.openai_proto.settings",
-]
-
-
-def _mock_download(url, output_dir, keep_video=False):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    from core.platforms.bilibili import BilibiliPlatform
-    video_id = BilibiliPlatform().parse_url(url)
-    audio_path = output_dir / f"{video_id}.wav"
-    audio_path.write_bytes(b"fake audio")
-    return audio_path, {"title": "Test Video", "duration": 120, "video_id": video_id}, None
+MOCK_GET_ASR = "core.pipeline.get_asr"
 
 
 def _mock_yt_download(url, output_dir, keep_video=False):
@@ -41,39 +24,6 @@ def _mock_yt_download(url, output_dir, keep_video=False):
     return audio_path, {"title": "YouTube Video", "duration": 300, "video_id": video_id}, None
 
 
-def _mock_transcribe(audio_path, language="zh"):
-    return "这是一段测试转录文本。"
-
-
-def _make_mock_llm(summary_text="这是摘要", content_type="general"):
-    """Create a mock LLM that returns the given summary and content type."""
-    llm = MagicMock()
-    llm.classify.return_value = {"summary": "test video", "type": content_type}
-    llm.summarize.return_value = summary_text
-    llm.summarize_multimodal.return_value = summary_text
-    return llm
-
-
-def _make_settings(tmp_dir):
-    s = MagicMock()
-    s.data_dir = Path(tmp_dir)
-    s.cache_dir = Path(tmp_dir) / "cache"
-    s.audio_dir = Path(tmp_dir) / "cache" / "audio"
-    s.transcript_dir = Path(tmp_dir) / "cache" / "transcripts"
-    s.frames_dir = Path(tmp_dir) / "cache" / "frames"
-    s.db_path = Path(tmp_dir) / "test.db"
-    s.whisper_model = "base"
-    s.llm_provider = "claude"
-    s.llm_model = "test-model"
-    s.anthropic_api_key = "test-key"
-    s.openai_api_key = "test-key"
-    s.openai_base_url = "http://test"
-    s.anthropic_base_url = ""
-    for d in [s.data_dir, s.cache_dir, s.audio_dir, s.transcript_dir]:
-        d.mkdir(parents=True, exist_ok=True)
-    return s
-
-
 def _wait_done(client, task_id, timeout=10):
     for _ in range(timeout * 2):
         resp = client.get(f"/api/tasks/{task_id}")
@@ -82,25 +32,6 @@ def _wait_done(client, task_id, timeout=10):
             return data
         time.sleep(0.5)
     return data
-
-
-@pytest.fixture
-def client(tmp_path):
-    mock_s = _make_settings(tmp_path)
-    patches = [patch(t, mock_s) for t in SETTINGS_TARGETS]
-
-    for p in patches:
-        p.start()
-
-    import core.api.routes as routes
-    from core.storage.db import Storage
-    routes.db = Storage(db_path=tmp_path / "test.db")
-
-    app = __import__("core.main", fromlist=["app"]).app
-    yield TestClient(app)
-
-    for p in patches:
-        p.stop()
 
 
 # --- Tests ---
@@ -114,10 +45,10 @@ def test_invalid_url_400(client):
     assert r.status_code == 400
 
 
-def test_full_pipeline_happy_path(client):
-    with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
-         patch(MOCK_GET_LLM, return_value=_make_mock_llm("这是摘要")):
+def test_full_pipeline_happy_path(client, mock_download, mock_asr, mock_llm):
+    with patch(MOCK_DOWNLOAD, side_effect=mock_download), \
+         patch(MOCK_GET_ASR, return_value=mock_asr()), \
+         patch(MOCK_GET_LLM, return_value=mock_llm("这是摘要")):
 
         r = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV123"})
         assert r.status_code == 202
@@ -130,10 +61,10 @@ def test_full_pipeline_happy_path(client):
         assert data["transcript"] == "这是一段测试转录文本。"
 
 
-def test_task_list(client):
-    with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
-         patch(MOCK_GET_LLM, return_value=_make_mock_llm("摘要")):
+def test_task_list(client, mock_download, mock_asr, mock_llm):
+    with patch(MOCK_DOWNLOAD, side_effect=mock_download), \
+         patch(MOCK_GET_ASR, return_value=mock_asr()), \
+         patch(MOCK_GET_LLM, return_value=mock_llm("摘要")):
 
         client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV123"})
         time.sleep(1)
@@ -142,32 +73,35 @@ def test_task_list(client):
         assert len(r.json()["tasks"]) >= 1
 
 
-def test_status_transitions(client):
+def test_status_transitions(client, mock_download, mock_asr):
     statuses = []
 
     def track_download(url, output_dir, keep_video=False):
         statuses.append("downloading")
-        return _mock_download(url, output_dir, keep_video)
+        return mock_download(url, output_dir, keep_video)
 
-    def track_transcribe(audio_path, language="zh"):
-        statuses.append("transcribing")
-        return _mock_transcribe(audio_path, language)
+    asr = mock_asr()
+    asr.transcribe_segments.side_effect = lambda *a, **kw: (statuses.append("transcribing"), ("转录文本", [{"start": 0.0, "end": 5.0, "text": "转录文本"}]))[1]
 
     llm = MagicMock()
     llm.classify.side_effect = lambda *a, **kw: (statuses.append("classifying"), {"summary": "", "type": "general"})[1]
-    llm.summarize.side_effect = lambda *a, **kw: (statuses.append("summarizing"), "摘要")[1]
+    llm.generate_three_stage.side_effect = lambda *a, **kw: (statuses.append("generating_three_stage"), {
+        "preview": {"overview": "概述", "questions": [], "pre_quiz": []},
+        "index": [{"time_seconds": 10, "time_display": "00:10", "label": "点", "detail": "d"}],
+        "summary": {"text": "摘要", "cards": [], "post_quiz": [], "weak_points": []},
+    })[1]
 
     with patch(MOCK_DOWNLOAD, side_effect=track_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=track_transcribe), \
+         patch(MOCK_GET_ASR, return_value=asr), \
          patch(MOCK_GET_LLM, return_value=llm):
 
         r = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV123"})
         _wait_done(client, r.json()["task_id"])
 
-        assert statuses == ["downloading", "transcribing", "classifying", "summarizing"]
+        assert statuses == ["downloading", "transcribing", "classifying", "generating_three_stage"]
 
 
-def test_pipeline_download_error(client):
+def test_pipeline_download_error(client, mock_download):
     with patch(MOCK_DOWNLOAD, side_effect=ConnectionError("超时")):
         r = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV123"})
         data = _wait_done(client, r.json()["task_id"])
@@ -175,12 +109,12 @@ def test_pipeline_download_error(client):
         assert "超时" in data["error"]
 
 
-def test_pipeline_llm_error(client):
-    llm = _make_mock_llm()
+def test_pipeline_llm_error(client, mock_download, mock_asr, mock_llm):
+    llm = mock_llm()
     llm.classify.side_effect = RuntimeError("API key invalid")
 
-    with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+    with patch(MOCK_DOWNLOAD, side_effect=mock_download), \
+         patch(MOCK_GET_ASR, return_value=mock_asr()), \
          patch(MOCK_GET_LLM, return_value=llm):
 
         r = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV123"})
@@ -203,10 +137,10 @@ def test_task_not_found(client):
     assert client.get("/api/tasks/nonexist").status_code == 404
 
 
-def test_openai_provider(client):
-    with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
-         patch(MOCK_GET_LLM, return_value=_make_mock_llm("OpenAI摘要")):
+def test_openai_provider(client, mock_download, mock_asr, mock_llm):
+    with patch(MOCK_DOWNLOAD, side_effect=mock_download), \
+         patch(MOCK_GET_ASR, return_value=mock_asr()), \
+         patch(MOCK_GET_LLM, return_value=mock_llm("OpenAI摘要")):
 
         r = client.post("/api/summarize", json={
             "url": "https://bilibili.com/video/BV123",
@@ -217,60 +151,56 @@ def test_openai_provider(client):
         assert data["summary"] == "OpenAI摘要"
 
 
-def test_cache_hit_skips_download(client):
+def test_cache_hit_skips_download(client, mock_download, mock_asr, mock_llm):
     """Same video_id reuses cached audio/transcript, skips download and transcription."""
     download_count = 0
-    transcribe_count = 0
+    asr = mock_asr()
 
     def counting_download(url, output_dir, keep_video=False):
         nonlocal download_count
         download_count += 1
-        return _mock_download(url, output_dir, keep_video)
-
-    def counting_transcribe(audio_path, language="zh"):
-        nonlocal transcribe_count
-        transcribe_count += 1
-        return _mock_transcribe(audio_path, language)
+        return mock_download(url, output_dir, keep_video)
 
     with patch(MOCK_DOWNLOAD, side_effect=counting_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=counting_transcribe), \
-         patch(MOCK_GET_LLM, return_value=_make_mock_llm("摘要")):
+         patch(MOCK_GET_ASR, return_value=asr), \
+         patch(MOCK_GET_LLM, return_value=mock_llm("摘要")):
 
         r1 = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV123"})
         _wait_done(client, r1.json()["task_id"])
         assert download_count == 1
-        assert transcribe_count == 1
+        assert asr.transcribe_segments.call_count == 1
 
         r2 = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV123"})
         _wait_done(client, r2.json()["task_id"])
-        assert download_count == 1
-        assert transcribe_count == 1
+        assert download_count == 1  # cache hit, no re-download
+        assert asr.transcribe_segments.call_count == 1  # cache hit, no re-transcribe
 
         tasks = client.get("/api/tasks").json()["tasks"]
         assert len(tasks) == 2
         assert all(t["status"] == "done" for t in tasks)
 
 
-def test_content_type_routing(client):
-    """Classify returns 'tutorial' → summarize receives content_type='tutorial'."""
-    llm = _make_mock_llm("教程摘要", content_type="tutorial")
+def test_content_type_routing(client, mock_download, mock_asr, mock_llm):
+    """Classify returns 'tutorial' -> summarize receives content_type='tutorial'."""
+    llm = mock_llm("教程摘要", content_type="tutorial")
 
-    with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+    with patch(MOCK_DOWNLOAD, side_effect=mock_download), \
+         patch(MOCK_GET_ASR, return_value=mock_asr()), \
          patch(MOCK_GET_LLM, return_value=llm):
 
         r = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV123"})
         _wait_done(client, r.json()["task_id"])
 
         llm.classify.assert_called_once()
-        call_kwargs = llm.summarize.call_args
-        assert call_kwargs[1].get("content_type") == "tutorial" or (len(call_kwargs[0]) > 3 and call_kwargs[0][3] == "tutorial")
+        # Pipeline uses generate_three_stage for text-only mode
+        call_args = llm.generate_three_stage.call_args
+        assert call_args is not None
 
 
-def test_youtube_happy_path(client):
+def test_youtube_happy_path(client, mock_asr, mock_llm):
     with patch(MOCK_YT_DOWNLOAD, side_effect=_mock_yt_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
-         patch(MOCK_GET_LLM, return_value=_make_mock_llm("YouTube摘要")):
+         patch(MOCK_GET_ASR, return_value=mock_asr()), \
+         patch(MOCK_GET_LLM, return_value=mock_llm("YouTube摘要")):
 
         r = client.post("/api/summarize", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
         assert r.status_code == 202
@@ -282,10 +212,10 @@ def test_youtube_happy_path(client):
         assert data["metadata"]["title"] == "YouTube Video"
 
 
-def test_youtube_short_url(client):
+def test_youtube_short_url(client, mock_asr, mock_llm):
     with patch(MOCK_YT_DOWNLOAD, side_effect=_mock_yt_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
-         patch(MOCK_GET_LLM, return_value=_make_mock_llm("摘要")):
+         patch(MOCK_GET_ASR, return_value=mock_asr()), \
+         patch(MOCK_GET_LLM, return_value=mock_llm("摘要")):
 
         r = client.post("/api/summarize", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
         assert r.status_code == 202

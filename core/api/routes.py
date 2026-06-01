@@ -1,6 +1,6 @@
+import json
 import logging
 import re
-import threading
 from pathlib import Path
 
 _URL_RE = re.compile(r"https?://[^\s]+")
@@ -28,6 +28,8 @@ from core.models import (
     TaskStatus,
 )
 from core.pipeline import get_platform, run_pipeline
+from core.workers import submit_pipeline, shutdown_workers
+from core.streaming import subscribe, unsubscribe, publish
 from core.storage.db import get_storage
 from core.storage.files import cache_size, clean_all, clean_cache
 
@@ -58,13 +60,8 @@ async def summarize(req: SummarizeRequest):
 
     task_id = db.create_task(url, platform="unknown")
 
-    # Run pipeline in background thread
-    thread = threading.Thread(
-        target=run_pipeline,
-        args=(task_id, url, req.language, req.llm_provider, req.detail, req.mode),
-        daemon=True,
-    )
-    thread.start()
+    # Run pipeline in background thread pool
+    submit_pipeline(run_pipeline, task_id, url, req.language, req.llm_provider, req.detail, req.mode)
 
     return TaskResponse(task_id=task_id, status=TaskStatus.PENDING)
 
@@ -87,12 +84,7 @@ async def summarize_batch(req: BatchSummarizeRequest):
             continue
 
         task_id = db.create_task(url, platform="unknown")
-        thread = threading.Thread(
-            target=run_pipeline,
-            args=(task_id, url, req.language, req.llm_provider, req.detail, req.mode),
-            daemon=True,
-        )
-        thread.start()
+        submit_pipeline(run_pipeline, task_id, url, req.language, req.llm_provider, req.detail, req.mode)
         created.append(BatchTaskItem(task_id=task_id, url=url, status=TaskStatus.PENDING))
 
     return BatchSummarizeResponse(tasks=created, skipped=skipped)
@@ -122,12 +114,7 @@ async def summarize_group(req: GroupSummarizeRequest):
         meta = {"group_id": group_id}
         db.update_task(task_id, metadata=meta)
 
-        thread = threading.Thread(
-            target=run_pipeline,
-            args=(task_id, url, req.language, req.llm_provider, req.detail, req.mode),
-            daemon=True,
-        )
-        thread.start()
+        submit_pipeline(run_pipeline, task_id, url, req.language, req.llm_provider, req.detail, req.mode)
         created.append(task_id)
 
     return GroupSummarizeResponse(group_id=group_id, task_ids=created, skipped=skipped)
@@ -218,36 +205,23 @@ async def get_task_status(task_id: str):
 
 @router.get("/api/tasks/{task_id}/stream")
 async def stream_task_summary(task_id: str):
-    """SSE endpoint: stream summary chunks as they are generated."""
-    from core.pipeline import get_stream_chunks
-
+    """SSE endpoint: stream summary chunks as they are generated via asyncio.Queue."""
     task = db.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    def event_generator():
-        sent = 0
-        while True:
-            chunks = get_stream_chunks(task_id)
-            if len(chunks) > sent:
-                for chunk in chunks[sent:]:
-                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
-                sent = len(chunks)
+    q = subscribe(task_id)
 
-            # Check if task is done
-            status = db.get_task_status(task_id)
-            if status and status["status"] in ("done", "failed"):
-                # Send final complete summary if done
-                if status["status"] == "done":
-                    full_task = db.get_task(task_id)
-                    if full_task and full_task.get("summary"):
-                        yield f"data: {json.dumps({'done': True, 'summary': full_task['summary']})}\n\n"
-                else:
-                    yield f"data: {json.dumps({'done': True, 'error': task.get('error', '')})}\n\n"
-                break
-
-            import time
-            time.sleep(0.5)
+    async def event_generator():
+        try:
+            while True:
+                data = await q.get()
+                if data.get("done"):
+                    yield f"data: {json.dumps(data)}\n\n"
+                    break
+                yield f"data: {json.dumps(data)}\n\n"
+        finally:
+            unsubscribe(task_id, q)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -448,12 +422,7 @@ async def retry_task(task_id: str):
     language = meta.get("language", "zh")
     content_type = meta.get("content_type", "general")
 
-    thread = threading.Thread(
-        target=run_pipeline,
-        args=(task_id, task["url"], language, "openai", "normal", "multimodal"),
-        daemon=True,
-    )
-    thread.start()
+    submit_pipeline(run_pipeline, task_id, task["url"], language, "openai", "normal", "multimodal")
 
     return TaskResponse(task_id=task_id, status=TaskStatus.PENDING)
 

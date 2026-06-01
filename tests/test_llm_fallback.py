@@ -98,7 +98,7 @@ class TestMultimodalFallback:
         video_path.suffix = ".mp4"
         video_path.name = "test.mp4"
 
-        # Mock _extract_frames to raise
-        with patch("core.llm.openai_proto._extract_frames", side_effect=RuntimeError("fail")):
+        # Mock extract_frames to raise
+        with patch("core.llm.openai_proto.extract_frames", side_effect=RuntimeError("fail")):
             result = llm.summarize_multimodal("transcript", video_path)
         assert result == "Native video summary"

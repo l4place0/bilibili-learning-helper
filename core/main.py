@@ -9,6 +9,7 @@ from core.api.routes import router
 from core.config import settings
 from core.storage.db import get_storage
 from core.storage.files import auto_clean_cache
+from core.workers import shutdown_workers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +33,9 @@ async def lifespan(app: FastAPI):
     if deleted_files:
         logger.info("Startup cache cleanup: removed %d files, freed %.1f MB", deleted_files, freed / 1024 / 1024)
     yield
+    # Shutdown: drain pipeline thread pool
+    shutdown_workers()
+    logger.info("Pipeline workers shut down")
 
 
 app = FastAPI(title="Video Summarizer", version="0.1.0", lifespan=lifespan)

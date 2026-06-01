@@ -3,6 +3,7 @@ import os
 import threading
 from pathlib import Path
 
+from core.asr.base import BaseASR
 from core.config import settings
 
 # Set HuggingFace mirror endpoint if configured
@@ -102,7 +103,9 @@ def _transcribe_once(model, backend: str, audio_path: Path, language: str, beam_
     """Single transcription attempt. Returns (text, segments) with segment timestamps."""
     seg_data: list[dict] = []
     if backend == "faster":
-        segments, info = model.transcribe(str(audio_path), language=language, beam_size=beam_size, vad_filter=False)
+        device = _get_device()
+        batch_size = 4 if device == "cuda" else 2
+        segments, info = model.transcribe(str(audio_path), language=language, beam_size=beam_size, vad_filter=True, batch_size=batch_size)
         logger.info("Whisper returned generator, language=%.2f, beam_size=%d", info.language_probability, beam_size)
         lines = []
         seg_count = 0
@@ -214,8 +217,8 @@ def transcribe_segments(audio_path: Path, language: str = "zh") -> tuple[str, li
         raise
 
 
-class InProcessASR:
-    """Wrapper around the in-process Whisper transcribe function (duck-typed BaseASR)."""
+class InProcessASR(BaseASR):
+    """Wrapper around the in-process Whisper transcribe function."""
 
     def transcribe(self, audio_path: Path, language: str = "zh") -> str:
         return transcribe(audio_path, language)

@@ -1,8 +1,10 @@
 """CLI subcommands for video-sum."""
 
-import json
+import atexit
 import logging
+import socket
 import sys
+import threading
 import time
 
 import click
@@ -13,21 +15,88 @@ from cli.output import emit, emit_error
 # Redirect all logging to stderr so stdout stays clean JSON
 logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s: %(message)s")
 
+# Server lifecycle
+_server = None
+
+
+def _free_port() -> int:
+    """Find a free TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _start_server(port: int):
+    """Start FastAPI app in a background thread. Returns the thread."""
+    global _server
+    from core.main import app
+    import uvicorn
+
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    _server = server
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    # Register cleanup
+    atexit.register(lambda: setattr(server, "should_exit", True))
+
+    # Wait for server to be ready
+    url = f"http://127.0.0.1:{port}"
+    for _ in range(30):
+        try:
+            httpx.get(f"{url}/health", timeout=2)
+            return thread
+        except httpx.ConnectError:
+            time.sleep(0.5)
+    emit_error(f"Server failed to start on {url}")
+
+
+def _create_progress():
+    """Create a Rich progress bar if available, else None."""
+    try:
+        from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+        return Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+            file=sys.stderr,  # Keep stdout clean
+        )
+    except ImportError:
+        return None
+
 
 @click.command()
 @click.argument("url")
 @click.option("--lang", default="zh", help="Language (zh/en/ja)")
 @click.option("--provider", default="openai", help="LLM provider (openai/claude)")
-@click.option("--asr", default="", help="ASR provider (inprocess/local/openai)")
 @click.option("--detail", default="normal", help="Detail level (brief/normal/detailed)")
 @click.option("--mode", default="multimodal", help="Mode (multimodal/audio)")
 @click.option("--remote", default="", help="Remote server URL (e.g. http://localhost:8000)")
-def run(url, lang, provider, asr, detail, mode, remote):
+@click.option("--port", default=0, help="Local server port (0 = auto)")
+@click.option("--timeout", default=300, type=int, help="Timeout in seconds (default: 300)")
+def run(url, lang, provider, detail, mode, remote, port, timeout):
     """Summarize a video URL. Emits JSON events to stdout."""
     if remote:
-        _run_remote(url, lang, provider, detail, mode, remote)
+        _run_remote(url, lang, provider, detail, mode, remote, timeout)
     else:
-        _run_local(url, lang, provider, asr, detail, mode)
+        # Start embedded server
+        port = port or _free_port()
+        _start_server(port)
+        _run_remote(url, lang, provider, detail, mode, f"http://127.0.0.1:{port}", timeout)
+
+
+@click.command()
+@click.option("--port", default=8000, help="Server port")
+@click.option("--host", default="0.0.0.0", help="Server host")
+def serve(port, host):
+    """Start the web server (foreground)."""
+    import uvicorn
+    from core.main import app
+
+    uvicorn.run(app, host=host, port=port)
 
 
 @click.command()
@@ -94,58 +163,8 @@ def result(task_id, remote):
         emit_error(f"Cannot connect to {server}")
 
 
-def _run_local(url, lang, provider, asr_provider, detail, mode):
-    """Local orchestration: download → ASR → LLM → output."""
-    try:
-        from core.config import settings
-        from core.llm import get_llm
-        from core.asr import get_asr
-        from core.platforms.base import BasePlatform
-        from core.platforms.bilibili import BilibiliPlatform
-        from core.platforms.youtube import YouTubePlatform
-
-        # Resolve platform
-        platforms = [BilibiliPlatform(), YouTubePlatform()]
-        platform = None
-        for p in platforms:
-            try:
-                p.validate_url(url)
-                platform = p
-                break
-            except ValueError:
-                continue
-        if not platform:
-            emit_error(f"Unsupported URL: {url}")
-
-        # Download
-        emit("downloading", url=url)
-        audio_dir = settings.audio_dir / "cli"
-        keep_video = mode == "multimodal"
-        audio_path, metadata, video_path = platform.download(url, audio_dir, keep_video=keep_video)
-        emit("downloaded", title=metadata.get("title", ""), duration=metadata.get("duration", 0))
-
-        # Transcribe
-        emit("transcribing")
-        asr = get_asr(asr_provider)
-        transcript = asr.transcribe(audio_path, lang)
-        emit("transcribed", length=len(transcript))
-
-        # LLM
-        llm = get_llm(provider)
-        emit("classifying")
-        content_type = llm.classify(transcript, lang=lang, multimodal=False)
-        emit("classified", content_type=content_type)
-
-        emit("summarizing")
-        summary = llm.summarize(transcript, lang=lang, detail=detail, content_type=content_type)
-        emit("done", summary=summary, transcript=transcript, metadata=metadata, content_type=content_type)
-
-    except Exception as e:
-        emit_error(str(e))
-
-
-def _run_remote(url, lang, provider, detail, mode, server):
-    """Remote orchestration: submit → poll → result."""
+def _run_remote(url, lang, provider, detail, mode, server, timeout=300):
+    """Submit → poll → result with timeout."""
     try:
         # Submit
         emit("submitting", url=url)
@@ -157,27 +176,63 @@ def _run_remote(url, lang, provider, detail, mode, server):
         task_id = resp.json()["task_id"]
         emit("submitted", task_id=task_id)
 
-        # Poll
-        while True:
-            time.sleep(2)
-            status_resp = httpx.get(f"{server}/api/tasks/{task_id}/status", timeout=10)
-            status_resp.raise_for_status()
-            data = status_resp.json()
-            emit("progress", status=data["status"], progress=data.get("progress", 0))
+        # Poll with timeout
+        progress = _create_progress()
+        deadline = time.monotonic() + timeout
 
-            if data["status"] == "done":
-                # Get full result
-                result_resp = httpx.get(f"{server}/api/tasks/{task_id}", timeout=10)
-                result_resp.raise_for_status()
-                full = result_resp.json()
-                emit("done", summary=full.get("summary", ""),
-                     transcript=full.get("transcript", ""),
-                     metadata=full.get("metadata", {}))
-                return
-            elif data["status"] == "failed":
-                emit_error(f"Task failed: {data.get('error', 'unknown')}")
+        if progress:
+            with progress:
+                task = progress.add_task("Processing...", total=100)
+                while time.monotonic() < deadline:
+                    time.sleep(2)
+                    data = _poll_status(server, task_id)
+                    if data is None:
+                        continue
+                    progress.update(task, completed=data.get("progress", 0))
+                    emit("progress", status=data["status"], progress=data.get("progress", 0))
+
+                    if data["status"] == "done":
+                        _emit_result(server, task_id)
+                        return
+                    elif data["status"] == "failed":
+                        emit_error(f"Task failed: {data.get('error', 'unknown')}")
+        else:
+            while time.monotonic() < deadline:
+                time.sleep(2)
+                data = _poll_status(server, task_id)
+                if data is None:
+                    continue
+                emit("progress", status=data["status"], progress=data.get("progress", 0))
+
+                if data["status"] == "done":
+                    _emit_result(server, task_id)
+                    return
+                elif data["status"] == "failed":
+                    emit_error(f"Task failed: {data.get('error', 'unknown')}")
+
+        emit_error(f"Timed out after {timeout}s")
 
     except httpx.ConnectError:
         emit_error(f"Cannot connect to {server}")
     except httpx.HTTPStatusError as e:
         emit_error(f"Server error: {e.response.status_code}")
+
+
+def _poll_status(server, task_id):
+    """Poll task status. Returns data dict or None on transient error."""
+    try:
+        status_resp = httpx.get(f"{server}/api/tasks/{task_id}/status", timeout=10)
+        status_resp.raise_for_status()
+        return status_resp.json()
+    except (httpx.ConnectError, httpx.HTTPStatusError):
+        return None
+
+
+def _emit_result(server, task_id):
+    """Fetch and emit full task result."""
+    result_resp = httpx.get(f"{server}/api/tasks/{task_id}", timeout=10)
+    result_resp.raise_for_status()
+    full = result_resp.json()
+    emit("done", summary=full.get("summary", ""),
+         transcript=full.get("transcript", ""),
+         metadata=full.get("metadata", {}))

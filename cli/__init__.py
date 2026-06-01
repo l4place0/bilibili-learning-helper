@@ -10,9 +10,10 @@ def main():
     pass
 
 
-from cli.commands import run, submit, status, result  # noqa: E402
+from cli.commands import run, serve, submit, status, result  # noqa: E402
 
 main.add_command(run)
+main.add_command(serve)
 main.add_command(submit)
 main.add_command(status)
 main.add_command(result)

@@ -15,6 +15,7 @@ from core.platforms.youtube import YouTubePlatform
 from core.storage.db import Storage, get_storage
 from core.observability.stage import StageContext
 from core.observability.metrics import record_transcribe_empty, record_llm_fallback
+from core.workers import _shutdown
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,12 @@ def _stream_callback(task_id: str, chunk: str):
     """Called by LLM for each streaming chunk."""
     with _stream_lock:
         _stream_buffers.setdefault(task_id, []).append(chunk)
+    # Also publish to queue-based subscribers
+    try:
+        from core.streaming import publish as _publish
+        _publish(task_id, {"chunk": chunk})
+    except Exception:
+        pass
 
 
 def _cleanup_stream(task_id: str):
@@ -113,6 +120,15 @@ def _try_cache(db: Storage, url: str, task_id: str) -> tuple[str, dict] | None:
 
     new_transcript = settings.transcript_dir / f"{task_id}.txt"
     shutil.copy2(cached_transcript, new_transcript)
+
+    # Copy cached frames if they exist for this video
+    cached_frames_dir = settings.frames_dir / cached_task_id
+    if cached_frames_dir.exists() and any(cached_frames_dir.iterdir()):
+        new_frames_dir = settings.frames_dir / task_id
+        if not new_frames_dir.exists():
+            shutil.copytree(cached_frames_dir, new_frames_dir)
+            logger.info("[%s] Copied %d cached frames from task %s",
+                        task_id[:8], len(list(new_frames_dir.iterdir())), cached_task_id[:8])
 
     transcript = cached_transcript.read_text(encoding="utf-8")
     metadata = cached.get("metadata", {})
@@ -221,6 +237,11 @@ def run_pipeline(task_id: str, url: str, language: str, llm_provider: str, detai
             metadata["transcript_segments"] = transcript_segments
             db.update_task(task_id, transcript=transcript, metadata=metadata)
 
+        # Shutdown checkpoint after download/transcribe
+        if _shutdown.is_set():
+            logger.info("[%s] Shutdown requested, aborting pipeline", task_id[:8])
+            return
+
         llm = get_llm(llm_provider)
         is_multimodal = mode == "multimodal" and video_path and video_path.exists()
 
@@ -253,78 +274,47 @@ def run_pipeline(task_id: str, url: str, language: str, llm_provider: str, detai
         metadata["language"] = language
         db.update_task(task_id, metadata=metadata)
 
-        # Summarize
-        with StageContext(task_id, "summarize") as stage:
+        # Shutdown checkpoint after classify
+        if _shutdown.is_set():
+            logger.info("[%s] Shutdown requested, aborting pipeline", task_id[:8])
+            return
+
+        # Generate three-stage learning materials (preview + index + summary)
+        with StageContext(task_id, "generate_three_stage") as stage:
             stage.input(content_type=content_type, detail=detail, multimodal=is_multimodal)
             stage.decision("llm_provider", llm_provider, reason="configured")
-            db.update_task(task_id, status="summarizing", progress=90)
-            tracker.start_stage("summarize")
+            db.update_task(task_id, status="generating_three_stage", progress=90)
+            tracker.start_stage("generate_three_stage")
 
-            if is_multimodal:
-                stage.decision("mode", "multimodal", reason="video available + multimodal requested")
-                try:
-                    logger.info("[%s] Summarizing (multimodal, type=%s, prefetched_frames=%d, has_segments=%s)...",
-                                task_id[:8], content_type, len(prefetched_frames) if prefetched_frames else 0, has_segments)
-                    summary = llm.summarize_multimodal(
-                        enriched_transcript, video_path, lang=language, detail=detail,
-                        content_type=content_type, prefetched_frames=prefetched_frames,
-                        has_segments=has_segments,
-                    )
-                except Exception as e:
-                    logger.warning("[%s] Multimodal failed (%s), falling back to text-only", task_id[:8], e)
-                    stage.warning(f"Multimodal failed ({e}), fell back to text-only")
-                    stage.decision("fallback", "text-only", reason=f"multimodal error: {e}")
-                    record_llm_fallback()
-                    summary = llm.summarize(enriched_transcript, lang=language, detail=detail, content_type=content_type, has_segments=has_segments)
-            else:
-                stage.decision("mode", "text-only", reason="no video or not multimodal mode")
-                logger.info("[%s] Summarizing (type=%s, has_segments=%s)...", task_id[:8], content_type, has_segments)
-                chunks = []
-                for chunk in llm.summarize_stream(enriched_transcript, lang=language, detail=detail, content_type=content_type, has_segments=has_segments):
-                    chunks.append(chunk)
-                    _stream_callback(task_id, chunk)
-                summary = "".join(chunks)
+            logger.info("[%s] Generating three-stage materials (type=%s, has_segments=%s)...",
+                        task_id[:8], content_type, has_segments)
+            three_stage = llm.generate_three_stage(
+                enriched_transcript, lang=language, detail=detail, has_segments=has_segments,
+            )
 
-            tracker.end_stage("summarize", api_calls=1)
-            stage.output(summary_length=len(summary))
+            summary = three_stage.get("summary", {}).get("text", "")
+            metadata["preview"] = three_stage.get("preview", {})
+            metadata["index"] = three_stage.get("index", [])
+            metadata["questions"] = three_stage.get("summary", {}).get("cards", [])
 
-        # Generate questions (active learning)
-        with StageContext(task_id, "generate_questions") as stage:
-            stage.input(content_type=content_type, has_segments=has_segments)
-            db.update_task(task_id, status="generating_questions", progress=95)
-            tracker.start_stage("generate_questions")
-            try:
-                from core.questions import parse_questions
-                from core.llm.prompts import get_question_generation_prompt
-                from core.asr import format_segments_for_llm
+            # Stream summary text for SSE compatibility
+            _stream_callback(task_id, summary)
 
-                # Build question generation input (summary + top segments)
-                q_prompt_template = get_question_generation_prompt(content_type, lang=language)
-                if has_segments:
-                    # Use first 40% of segments as context (token control)
-                    seg_limit = max(10, len(transcript_segments) * 2 // 5)
-                    top_segments = transcript_segments[:seg_limit]
-                    q_transcript = format_segments_for_llm(top_segments)
-                else:
-                    q_transcript = transcript[:3000]
-
-                q_prompt = q_prompt_template.replace("{summary}", summary).replace("{transcript}", q_transcript)
-                raw_questions = llm._chat(q_prompt, max_tokens=4096)
-                questions = parse_questions(raw_questions)
-                metadata["questions"] = questions
-                stage.output(question_count=len(questions))
-                logger.info("[%s] Generated %d questions", task_id[:8], len(questions))
-            except Exception as e:
-                logger.warning("[%s] Question generation failed: %s", task_id[:8], e)
-                stage.warning(f"Question generation failed: {e}")
-                metadata["questions"] = []
-            tracker.end_stage("generate_questions", api_calls=1)
+            tracker.end_stage("generate_three_stage", api_calls=1)
+            stage.output(summary_length=len(summary), index_count=len(metadata.get("index", [])))
 
         # Save metrics to metadata
         metadata["metrics"] = tracker.finish()
         now = datetime.now(timezone.utc).isoformat()
         db.update_task(task_id, status="done", summary=summary, completed_at=now, progress=100, metadata=metadata)
         logger.info("[%s] Done! Total: %dms", task_id[:8], metadata["metrics"]["total_duration_ms"])
+
+        # Publish done event to SSE subscribers
+        try:
+            from core.streaming import publish as _publish
+            _publish(task_id, {"done": True, "summary": summary})
+        except Exception:
+            pass
 
         # Auto-trigger synthesis if this task belongs to a group
         group_id = metadata.get("group_id")
@@ -340,6 +330,12 @@ def run_pipeline(task_id: str, url: str, language: str, llm_provider: str, detai
             db.update_task(task_id, status="failed", error=str(e), completed_at=now, metadata=metadata)
         except Exception:
             db.update_task(task_id, status="failed", error=str(e), completed_at=now)
+        # Publish failure event to SSE subscribers
+        try:
+            from core.streaming import publish as _publish
+            _publish(task_id, {"done": True, "error": str(e)})
+        except Exception:
+            pass
     finally:
         _cleanup_stream(task_id)
         if video_path and video_path.exists():
