@@ -185,6 +185,8 @@ mark.current { background: var(--orange); }
 </header>
 
 <nav class="nav-tabs">
+  <button class="nav-tab" data-tab="preview" id="tab-preview">Preview</button>
+  <button class="nav-tab" data-tab="index" id="tab-index">Index</button>
   <button class="nav-tab active" data-tab="summary">Summary</button>
   <button class="nav-tab" data-tab="cards">Cards <span class="badge" id="cards-count">{{ review_data.cards|length }}</span></button>
   <button class="nav-tab" data-tab="timeline">Timeline <span class="badge" id="frames-count">{{ review_data.frames|length }}</span></button>
@@ -192,6 +194,16 @@ mark.current { background: var(--orange); }
 </nav>
 
 <main>
+  <!-- ===== Preview Panel ===== -->
+  <section id="panel-preview" class="panel">
+    <div id="preview-content"></div>
+  </section>
+
+  <!-- ===== Index Panel ===== -->
+  <section id="panel-index" class="panel">
+    <div id="index-content"></div>
+  </section>
+
   <!-- ===== Summary Panel ===== -->
   <section id="panel-summary" class="panel active">
     <div class="search-bar">
@@ -326,6 +338,117 @@ const summaryEl = $('#summary-content');
 // Strip review cards section from displayed summary
 const summaryForDisplay = DATA.summary.replace(/##\s*(?:复习卡片|Review Cards)[\s\S]*$/i, '').trim();
 summaryEl.innerHTML = renderMarkdown(summaryForDisplay);
+
+// ===== Three-Stage: Preview Panel =====
+function renderPreview() {
+  const el = $('#preview-content');
+  if (!el) return;
+  const preview = DATA.preview;
+  if (!preview) {
+    el.innerHTML = '<div class="empty-state"><p>No preview available for this video.</p></div>';
+    return;
+  }
+
+  let html = '';
+
+  // Overview
+  if (preview.overview) {
+    html += `<div class="summary-content"><h2>Overview</h2><p>${escHtml(preview.overview)}</p></div>`;
+  }
+
+  // Core questions
+  if (preview.questions && preview.questions.length) {
+    html += '<div style="margin-top:20px"><h2 style="font-size:1.15rem;color:var(--accent);margin-bottom:12px">Core Questions</h2>';
+    html += '<div style="background:var(--bg2);border-radius:var(--radius);padding:16px">';
+    preview.questions.forEach((q, i) => {
+      html += `<div style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start"><span style="color:var(--accent);font-weight:600;min-width:24px">${i+1}.</span><span>${escHtml(q)}</span></div>`;
+    });
+    html += '</div></div>';
+  }
+
+  // Pre-watch quiz
+  if (preview.pre_quiz && preview.pre_quiz.length) {
+    html += '<div style="margin-top:20px"><h2 style="font-size:1.15rem;color:var(--accent);margin-bottom:12px">Pre-Watch Quiz</h2>';
+    html += '<p style="color:var(--fg2);font-size:.85rem;margin-bottom:12px">Test your prerequisite knowledge before watching.</p>';
+    preview.pre_quiz.forEach((q, i) => {
+      html += `<div class="q-card" data-type="choice" data-quiz-type="pre">
+        <div class="q-header"><span class="q-type">Pre-Quiz</span></div>
+        <div class="q-stem">${escHtml(q.question)}</div>
+        <div class="q-options">${(q.options||[]).map((o,j)=>`<div class="q-opt" data-val="${j}">${escHtml(o)}</div>`).join('')}</div>
+        <div class="q-explanation"><strong>Answer: ${escHtml(q.answer||'')}</strong> ${escHtml(q.explanation||'')}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+
+  // Wire up quiz interactions
+  el.querySelectorAll('.q-opt').forEach(opt => {
+    opt.addEventListener('click', () => {
+      const card = opt.closest('.q-card');
+      if (!card) return;
+      card.querySelectorAll('.q-opt').forEach(s => s.classList.remove('selected'));
+      opt.classList.add('selected');
+      const expl = card.querySelector('.q-explanation');
+      if (expl) expl.classList.add('show');
+    });
+  });
+}
+
+// ===== Three-Stage: Index Panel =====
+function renderIndex() {
+  const el = $('#index-content');
+  if (!el) return;
+  const index = DATA.index;
+  if (!index || !index.length) {
+    el.innerHTML = '<div class="empty-state"><p>No index available for this video.</p></div>';
+    return;
+  }
+
+  const urlBase = DATA.videoUrlBase || '';
+  const platform = DATA.platform || '';
+
+  let html = '<div style="margin-bottom:16px"><p style="color:var(--fg2);font-size:.85rem">Click a timestamp to jump to the video.</p></div>';
+  html += '<div style="display:flex;flex-direction:column;gap:4px">';
+
+  index.forEach((entry, i) => {
+    const timeDisplay = entry.time_display || formatSeconds(entry.time_seconds || 0);
+    const linkUrl = urlBase ? `${urlBase}${urlBase.includes('?') ? '&' : '?'}t=${entry.time_seconds || 0}` : '';
+    const linkHtml = linkUrl
+      ? `<a href="${escHtml(linkUrl)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-variant-numeric:tabular-nums;min-width:48px;font-weight:600">${timeDisplay} ▶</a>`
+      : `<span style="color:var(--accent);font-variant-numeric:tabular-nums;min-width:48px;font-weight:600">${timeDisplay}</span>`;
+
+    html += `<div style="display:flex;gap:12px;padding:10px 14px;background:var(--bg2);border-radius:var(--radius);align-items:flex-start;transition:background .15s" onmouseenter="this.style.background='var(--bg3)'" onmouseleave="this.style.background='var(--bg2)'">
+      ${linkHtml}
+      <div style="flex:1">
+        <div style="font-weight:500;margin-bottom:2px">${escHtml(entry.label || '')}</div>
+        <div style="font-size:.85rem;color:var(--fg2)">${escHtml(entry.detail || '')}</div>
+      </div>
+    </div>`;
+  });
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function formatSeconds(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
+
+// Render preview and index panels
+renderPreview();
+renderIndex();
+
+// Handle backward compatibility: hide Preview/Index tabs for old tasks
+if (!DATA.hasThreeStage) {
+  const previewTab = $('#tab-preview');
+  const indexTab = $('#tab-index');
+  if (previewTab) previewTab.style.display = 'none';
+  if (indexTab) indexTab.style.display = 'none';
+}
 
 // ===== Citation click → jump to transcript segment =====
 summaryEl.addEventListener('click', e => {

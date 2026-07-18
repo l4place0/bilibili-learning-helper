@@ -16,7 +16,7 @@ class ClaudeLLM(BaseLLM):
     def __init__(self):
         if not settings.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY is not configured")
-        kwargs = {"api_key": settings.anthropic_api_key}
+        kwargs = {"api_key": settings.anthropic_api_key, "timeout": 120.0}
         if settings.anthropic_base_url:
             kwargs["base_url"] = settings.anthropic_base_url
         self.client = anthropic.Anthropic(**kwargs)

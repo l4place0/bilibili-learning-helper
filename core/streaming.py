@@ -8,7 +8,7 @@ _subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
 
 def subscribe(task_id: str) -> asyncio.Queue:
     """Subscribe to a task's event stream. Returns an asyncio.Queue."""
-    q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = asyncio.Queue(maxsize=100)
     _subscribers[task_id].append(q)
     return q
 

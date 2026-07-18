@@ -45,6 +45,13 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#favorite-btn').addEventListener('click', handleToggleFavorite);
     $('#export-markdown').addEventListener('click', handleExportMarkdown);
     $('#export-review-doc').addEventListener('click', handleExportReviewDoc);
+    $('#publish-btn').addEventListener('click', handlePublishClick);
+    $('#publish-cancel').addEventListener('click', closePublishDialog);
+    $('#publish-confirm').addEventListener('click', handlePublishConfirm);
+    $('#batch-publish-btn').addEventListener('click', () => handleBatchPublish(true));
+    $('#batch-unpublish-btn').addEventListener('click', () => handleBatchPublish(false));
+    $('#batch-close').addEventListener('click', closeBatchDialog);
+    $('#select-all-tasks').addEventListener('change', handleSelectAll);
     $('#retry-task-btn').addEventListener('click', handleRetryTask);
     $('#result-description')?.addEventListener('click', function() {
         this.classList.toggle('expanded');
@@ -526,6 +533,12 @@ function updateResult(task) {
             $('#export-review-doc').classList.remove('hidden');
         }
 
+        // Publish button
+        updatePublishButton(task);
+
+        // Re-publish banner
+        updatePublishBanner(task);
+
         // Metrics
         renderMetrics(meta.metrics);
 
@@ -793,12 +806,23 @@ function renderHistory(tasks) {
         const favClass = t.favorite ? 'active' : '';
         const favChar = t.favorite ? '&#9733;' : '&#9734;';
 
+        const publishUrl = (meta || {}).publish_url;
+        let publishedHtml;
+        if (publishUrl) {
+            const pubDate = ((meta || {}).published_at || '').slice(0, 10);
+            publishedHtml = `<span class="published-status">✓ ${pubDate}</span><br><a class="published-link" href="${publishUrl}" target="_blank">查看→</a>`;
+        } else {
+            publishedHtml = '<span class="published unpublished">-</span>';
+        }
+
         return `<tr>
+            <td><input type="checkbox" class="history-checkbox" data-task-id="${t.task_id}" onchange="updateBatchActions()"></td>
             <td><button class="star-btn-sm ${favClass}" onclick="toggleFavoriteFromList('${t.task_id}', this)">${favChar}</button></td>
             <td>${time}</td>
             <td>${escapeHtml(title)}</td>
             <td>${tagsHtml}</td>
             <td><span class="status-badge status-${t.status}">${statusLabel}</span></td>
+            <td>${publishedHtml}</td>
             <td>
                 <button class="ghost-btn small-btn" onclick="viewTask('${t.task_id}')">View</button>
                 <button class="danger-ghost-btn small-btn" onclick="deleteTaskFromList('${t.task_id}')">Delete</button>
@@ -1034,6 +1058,321 @@ async function handleExportReviewDoc() {
     } catch (err) {
         showToast('Export failed: ' + err.message, 'error');
     }
+}
+
+// --- Publish ---
+let publishDialogTaskId = null;
+
+function updatePublishButton(task) {
+    const btn = $('#publish-btn');
+    const meta = task.metadata || {};
+    if (task.status !== 'done') {
+        btn.classList.add('hidden');
+        return;
+    }
+    btn.classList.remove('hidden');
+    if (meta.publish_url) {
+        btn.textContent = '已发布 ✓';
+        btn.classList.add('published');
+        btn.onclick = () => {
+            // Show options: view or unpublish
+            publishDialogTaskId = task.task_id;
+            showPublishedOptions(task);
+        };
+    } else {
+        btn.textContent = 'Publish';
+        btn.classList.remove('published');
+        btn.onclick = handlePublishClick;
+    }
+}
+
+function showPublishedOptions(task) {
+    const meta = task.metadata || {};
+    const dialog = $('#publish-dialog');
+    const body = $('#publish-dialog-body');
+    const confirmBtn = $('#publish-confirm');
+    const cancelBtn = $('#publish-cancel');
+
+    body.innerHTML = `
+        <div class="dialog-info">此任务已发布到 GitHub Pages</div>
+        <div class="dialog-url"><a href="${meta.publish_url}" target="_blank" style="color:var(--accent)">${meta.publish_url}</a></div>
+    `;
+    confirmBtn.textContent = '取消发布';
+    confirmBtn.className = 'danger-ghost-btn small-btn';
+    confirmBtn.onclick = handleUnpublishConfirm;
+    cancelBtn.textContent = '关闭';
+    dialog.classList.remove('hidden');
+}
+
+function updatePublishBanner(task) {
+    const banner = $('#publish-banner');
+    const meta = task.metadata || {};
+    if (!meta.publish_url || !meta.published_at || !task.completed_at) {
+        banner.classList.add('hidden');
+        return;
+    }
+    // Check if content changed after publish
+    if (task.completed_at > meta.published_at) {
+        const publishDate = meta.published_at.slice(0, 10);
+        banner.innerHTML = `
+            <span class="banner-text">内容已变更，上次发布: ${publishDate}</span>
+            <div>
+                <button class="ghost-btn small-btn" onclick="handleRepublish()">重新发布</button>
+                <button class="ghost-btn small-btn" onclick="$('#publish-banner').classList.add('hidden')">忽略</button>
+            </div>
+        `;
+        banner.classList.remove('hidden');
+    } else {
+        banner.classList.add('hidden');
+    }
+}
+
+async function handleRepublish() {
+    if (!currentTaskId) return;
+    await doPublish([currentTaskId]);
+    $('#publish-banner').classList.add('hidden');
+}
+
+async function handlePublishClick() {
+    if (!currentTaskId) return;
+
+    // Check if GitHub is configured
+    try {
+        const resp = await fetch(`${API}/publish/status`);
+        const status = await resp.json();
+        if (!status.repo_configured) {
+            showSetupInstructions();
+            return;
+        }
+    } catch (_) {}
+
+    // Fetch task for dialog info
+    try {
+        const resp = await fetch(`${API}/tasks/${currentTaskId}`);
+        if (!resp.ok) return;
+        const task = await resp.json();
+        publishDialogTaskId = task.task_id;
+
+        const meta = task.metadata || {};
+        const title = meta.title || 'Untitled';
+        const platform = task.platform || 'unknown';
+        const tags = (meta.tags || []).concat(meta.content_type ? [meta.content_type] : []);
+
+        // Predict URL
+        let pagesUrl = '';
+        try {
+            const statusResp = await fetch(`${API}/publish/status`);
+            const status = await statusResp.json();
+            if (status.pages_url) {
+                pagesUrl = `${status.pages_url.replace(/\/$/, '')}/reviews/${task.task_id}.html`;
+            }
+        } catch (_) {}
+
+        const dialog = $('#publish-dialog');
+        const body = $('#publish-dialog-body');
+        const confirmBtn = $('#publish-confirm');
+        const cancelBtn = $('#publish-cancel');
+
+        body.innerHTML = `
+            <div class="dialog-info">
+                <div><span class="label">标题:</span> ${escapeHtml(title)}</div>
+                <div><span class="label">平台:</span> ${platform}</div>
+                ${tags.length ? `<div><span class="label">标签:</span> ${tags.map(t => escapeHtml(t)).join(', ')}</div>` : ''}
+            </div>
+            ${pagesUrl ? `<div class="dialog-url">发布后链接: ${pagesUrl}</div>` : ''}
+        `;
+        confirmBtn.textContent = '确认发布';
+        confirmBtn.className = 'small-btn';
+        confirmBtn.onclick = handlePublishConfirm;
+        cancelBtn.textContent = '取消';
+        dialog.classList.remove('hidden');
+    } catch (err) {
+        showToast('Failed to load task: ' + err.message, 'error');
+    }
+}
+
+function showSetupInstructions() {
+    const dialog = $('#publish-dialog');
+    const body = $('#publish-dialog-body');
+    const confirmBtn = $('#publish-confirm');
+    const cancelBtn = $('#publish-cancel');
+
+    body.innerHTML = `
+        <div class="setup-instructions">
+            <p>请先在 <code>.env</code> 中配置以下变量:</p>
+            <p><code>GITHUB_REPO</code> = user/video-reviews</p>
+            <p><code>GITHUB_TOKEN</code> = ghp_xxxx (PAT with repo scope)</p>
+            <p><code>GITHUB_PAGES_URL</code> = https://user.github.io/video-reviews</p>
+        </div>
+    `;
+    confirmBtn.textContent = '我知道了';
+    confirmBtn.className = 'small-btn';
+    confirmBtn.onclick = closePublishDialog;
+    cancelBtn.classList.add('hidden');
+    dialog.classList.remove('hidden');
+}
+
+function closePublishDialog() {
+    $('#publish-dialog').classList.add('hidden');
+    $('#publish-cancel').classList.remove('hidden');
+    publishDialogTaskId = null;
+}
+
+async function handlePublishConfirm() {
+    if (!publishDialogTaskId) return;
+    closePublishDialog();
+    await doPublish([publishDialogTaskId]);
+}
+
+async function handleUnpublishConfirm() {
+    if (!publishDialogTaskId) return;
+    const taskId = publishDialogTaskId;
+    closePublishDialog();
+
+    try {
+        showToast('正在取消发布...', 'info');
+        const resp = await fetch(`${API}/publish/${taskId}`, { method: 'DELETE' });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+            throw new Error(err.detail || 'Unpublish failed');
+        }
+        showToast('已取消发布', 'success');
+        // Refresh task view
+        if (currentTaskId === taskId) {
+            const taskResp = await fetch(`${API}/tasks/${taskId}`);
+            if (taskResp.ok) updateResult(await taskResp.json());
+        }
+        loadHistory();
+    } catch (err) {
+        showToast('取消发布失败: ' + err.message, 'error');
+    }
+}
+
+async function doPublish(taskIds) {
+    try {
+        showToast(`正在发布 ${taskIds.length} 个任务...`, 'info');
+        const resp = await fetch(`${API}/publish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_ids: taskIds }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+            throw new Error(err.detail || 'Publish failed');
+        }
+        const result = await resp.json();
+
+        if (result.published && result.published.length) {
+            const url = result.published[0].url;
+            showToast(`发布成功！共 ${result.published.length} 个`, 'success');
+
+            // Show success dialog with URL
+            showPublishSuccess(result.published);
+        }
+        if (result.failed && result.failed.length) {
+            showToast(`${result.failed.length} 个任务发布失败`, 'error');
+        }
+
+        // Refresh task view
+        if (taskIds.includes(currentTaskId)) {
+            const taskResp = await fetch(`${API}/tasks/${currentTaskId}`);
+            if (taskResp.ok) updateResult(await taskResp.json());
+        }
+        loadHistory();
+    } catch (err) {
+        showToast('发布失败: ' + err.message, 'error');
+    }
+}
+
+function showPublishSuccess(published) {
+    const dialog = $('#publish-dialog');
+    const body = $('#publish-dialog-body');
+    const confirmBtn = $('#publish-confirm');
+    const cancelBtn = $('#publish-cancel');
+
+    const urls = published.map(p => `<div class="dialog-url"><a href="${p.url}" target="_blank" style="color:var(--accent)">${p.url}</a></div>`).join('');
+
+    body.innerHTML = `
+        <div class="publish-success">
+            <p>✓ 已发布 ${published.length} 个任务到 GitHub Pages</p>
+            ${urls}
+            <div class="actions">
+                <button class="ghost-btn small-btn" onclick="copyUrl('${published[0].url}')">复制链接</button>
+                <button class="ghost-btn small-btn" onclick="window.open('${published[0].url}', '_blank')">打开</button>
+            </div>
+        </div>
+    `;
+    confirmBtn.textContent = '关闭';
+    confirmBtn.className = 'small-btn';
+    confirmBtn.onclick = closePublishDialog;
+    cancelBtn.classList.add('hidden');
+    dialog.classList.remove('hidden');
+}
+
+function copyUrl(url) {
+    navigator.clipboard.writeText(url).then(() => showToast('链接已复制', 'success'));
+}
+
+// --- Batch Publish ---
+function handleSelectAll(e) {
+    const checked = e.target.checked;
+    document.querySelectorAll('.history-checkbox').forEach(cb => {
+        cb.checked = checked;
+    });
+    updateBatchActions();
+}
+
+function updateBatchActions() {
+    const checked = document.querySelectorAll('.history-checkbox:checked');
+    const batchActions = $('#batch-actions');
+    const batchCount = $('#batch-count');
+    if (checked.length > 0) {
+        batchActions.classList.remove('hidden');
+        batchCount.textContent = `已选 ${checked.length} 个`;
+    } else {
+        batchActions.classList.add('hidden');
+    }
+}
+
+async function handleBatchPublish(isPublish) {
+    const checked = document.querySelectorAll('.history-checkbox:checked');
+    const taskIds = Array.from(checked).map(cb => cb.dataset.taskId);
+    if (!taskIds.length) return;
+
+    if (isPublish) {
+        await doPublish(taskIds);
+    } else {
+        // Batch unpublish
+        const dialog = $('#batch-dialog');
+        const body = $('#batch-progress-body');
+        const closeBtn = $('#batch-close');
+        body.innerHTML = '<div class="batch-progress-bar"><div class="batch-progress-fill" style="width:0%"></div></div>';
+        closeBtn.classList.add('hidden');
+        dialog.classList.remove('hidden');
+
+        let done = 0;
+        let failed = 0;
+        for (const taskId of taskIds) {
+            try {
+                const resp = await fetch(`${API}/publish/${taskId}`, { method: 'DELETE' });
+                if (resp.ok) done++; else failed++;
+            } catch (_) {
+                failed++;
+            }
+            const pct = Math.round(((done + failed) / taskIds.length) * 100);
+            body.querySelector('.batch-progress-fill').style.width = `${pct}%`;
+            body.innerHTML += `<div class="batch-item">${taskId.slice(0, 8)}: ${resp?.ok ? '✓ 已取消' : '✗ 失败'}</div>`;
+        }
+
+        body.innerHTML += `<div style="margin-top:12px">完成: ${done} 成功, ${failed} 失败</div>`;
+        closeBtn.classList.remove('hidden');
+        showToast(`批量取消发布完成: ${done} 成功, ${failed} 失败`, done > 0 ? 'success' : 'error');
+        loadHistory();
+    }
+}
+
+function closeBatchDialog() {
+    $('#batch-dialog').classList.add('hidden');
 }
 
 // --- Prompt Management ---

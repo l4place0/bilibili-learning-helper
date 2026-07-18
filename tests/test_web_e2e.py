@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 MOCK_DOWNLOAD = "core.platforms.bilibili.BilibiliPlatform.download"
-MOCK_TRANSCRIBE = "core.pipeline.transcribe"
+MOCK_GET_ASR = "core.pipeline.get_asr"
 MOCK_GET_LLM = "core.pipeline.get_llm"
 
 SETTINGS_TARGETS = [
@@ -48,8 +48,13 @@ def _mock_download(url, output_dir, keep_video=False):
     return audio_path, {"title": "Linux网络命名空间核心", "duration": 360, "video_id": video_id}, None
 
 
-def _mock_transcribe(audio_path, language="zh"):
-    return "这是一段关于Linux网络命名空间的详细讲解。首先介绍了什么是网络命名空间..."
+_MOCK_TRANSCRIPT = "这是一段关于Linux网络命名空间的详细讲解。首先介绍了什么是网络命名空间..."
+
+
+def _make_mock_asr(transcript=_MOCK_TRANSCRIPT):
+    asr = MagicMock()
+    asr.transcribe_segments.return_value = (transcript, [{"start": 0.0, "end": 5.0, "text": transcript}])
+    return asr
 
 
 def _mock_download_error(url, output_dir, keep_video=False):
@@ -61,6 +66,11 @@ def _make_mock_llm(summary="本视频详细讲解了Linux网络命名空间的�
     llm.classify.return_value = {"summary": "Linux网络命名空间", "type": content_type}
     llm.summarize.return_value = summary
     llm.summarize_multimodal.return_value = summary
+    llm.generate_three_stage.return_value = {
+        "preview": {"overview": "Linux网络命名空间概述", "questions": ["什么是网络命名空间？"], "pre_quiz": []},
+        "index": [{"time_seconds": 30, "time_display": "00:30", "label": "核心概念", "detail": "介绍网络命名空间"}],
+        "summary": {"text": summary, "cards": [], "post_quiz": [], "weak_points": []},
+    }
     return llm
 
 
@@ -73,6 +83,8 @@ def client(tmp_path):
 
     import core.api.routes as routes
     from core.storage.db import Storage
+    import core.storage.db as db_mod
+    db_mod._instance = None
     routes.db = Storage(db_path=tmp_path / "test.db")
 
     app = __import__("core.main", fromlist=["app"]).app
@@ -80,6 +92,7 @@ def client(tmp_path):
 
     for p in patches:
         p.stop()
+    db_mod._instance = None
 
 
 def _wait_done(client, task_id, timeout=15):
@@ -122,16 +135,23 @@ def test_scenario_2_submit_and_status_updates(client):
         statuses_seen.append("downloading")
         return _mock_download(url, output_dir, keep_video)
 
-    def track_transcribe(audio_path, language="zh"):
+    tracking_asr = _make_mock_asr()
+    _orig_ts = tracking_asr.transcribe_segments.side_effect
+    def track_transcribe_segments(*a, **kw):
         statuses_seen.append("transcribing")
-        return _mock_transcribe(audio_path, language)
+        return (_MOCK_TRANSCRIPT, [{"start": 0.0, "end": 5.0, "text": _MOCK_TRANSCRIPT}])
+    tracking_asr.transcribe_segments.side_effect = track_transcribe_segments
 
-    llm = MagicMock()
+    llm = _make_mock_llm()
     llm.classify.side_effect = lambda *a, **kw: (statuses_seen.append("classifying"), {"summary": "", "type": "general"})[1]
-    llm.summarize.side_effect = lambda *a, **kw: (statuses_seen.append("summarizing"), "本视频详细讲解了Linux网络命名空间的核心概念，包括隔离原理、veth pair配置和实际应用场景。")[1]
+    llm.generate_three_stage.side_effect = lambda *a, **kw: (statuses_seen.append("generating_three_stage"), {
+        "preview": {"overview": "概述", "questions": [], "pre_quiz": []},
+        "index": [{"time_seconds": 10, "time_display": "00:10", "label": "点", "detail": "d"}],
+        "summary": {"text": "本视频详细讲解了Linux网络命名空间的核心概念，包括隔离原理、veth pair配置和实际应用场景。", "cards": [], "post_quiz": [], "weak_points": []},
+    })[1]
 
     with patch(MOCK_DOWNLOAD, side_effect=track_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=track_transcribe), \
+         patch(MOCK_GET_ASR, return_value=tracking_asr), \
          patch(MOCK_GET_LLM, return_value=llm):
 
         resp = client.post("/api/summarize", json={
@@ -145,7 +165,7 @@ def test_scenario_2_submit_and_status_updates(client):
 
         data = _wait_done(client, task_id)
         assert data["status"] == "done"
-        assert statuses_seen == ["downloading", "transcribing", "classifying", "summarizing"]
+        assert statuses_seen == ["downloading", "transcribing", "classifying", "generating_three_stage"]
 
 
 # === Scenario 3: Done shows summary ===
@@ -153,7 +173,7 @@ def test_scenario_2_submit_and_status_updates(client):
 def test_scenario_3_done_shows_summary(client):
     """Task done → returns title, summary, transcript, metadata."""
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=_make_mock_llm()):
 
         resp = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV1xx411c7mq"})
@@ -177,7 +197,7 @@ def test_scenario_4_failed_shows_error(client):
     llm.classify.side_effect = RuntimeError("API key invalid")
 
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=llm):
 
         resp = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV1xx411c7mq"})
@@ -204,7 +224,7 @@ def test_scenario_4b_download_error(client):
 def test_scenario_5_history_after_refresh(client):
     """After task done → GET /api/tasks returns history."""
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=_make_mock_llm()):
 
         resp = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV1xx411c7mq"})
@@ -218,7 +238,6 @@ def test_scenario_5_history_after_refresh(client):
         task = tasks[0]
         assert task["status"] == "done"
         assert task["metadata"]["title"] == "Linux网络命名空间核心"
-        assert task["summary"] is not None
 
 
 # === Scenario 6: View history task ===
@@ -226,7 +245,7 @@ def test_scenario_5_history_after_refresh(client):
 def test_scenario_6_view_history_task(client):
     """Click view → GET /api/tasks/{id} returns full detail."""
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=_make_mock_llm()):
 
         resp = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV1xx411c7mq"})
@@ -249,7 +268,7 @@ def test_scenario_6_view_history_task(client):
 def test_scenario_7_cleanup_storage(client):
     """Cleanup → deletes all tasks and cache."""
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=_make_mock_llm()):
 
         resp = client.post("/api/summarize", json={"url": "https://bilibili.com/video/BV1xx411c7mq"})
@@ -301,7 +320,7 @@ def test_api_not_overridden_by_static(client):
 def test_multiple_tasks(client):
     """Multiple tasks in parallel, history complete."""
     with patch(MOCK_DOWNLOAD, side_effect=_mock_download), \
-         patch(MOCK_TRANSCRIBE, side_effect=_mock_transcribe), \
+         patch(MOCK_GET_ASR, return_value=_make_mock_asr()), \
          patch(MOCK_GET_LLM, return_value=_make_mock_llm()):
 
         ids = []

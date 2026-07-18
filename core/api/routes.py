@@ -4,9 +4,11 @@ import re
 from pathlib import Path
 
 _URL_RE = re.compile(r"https?://[^\s]+")
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from core.config import settings
 from core.models import (
@@ -34,8 +36,31 @@ from core.storage.db import get_storage
 from core.storage.files import cache_size, clean_all, clean_cache
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+
+security = HTTPBearer(auto_error=False)
+
+
+async def verify_api_key(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> None:
+    """Require Bearer token when API_SECRET is configured."""
+    if not settings.api_secret:
+        return  # auth disabled
+    if not credentials or credentials.credentials != settings.api_secret:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+router = APIRouter(dependencies=[Depends(verify_api_key)])
 db = get_storage()
+
+_ACTIVE_STATUSES = {"pending", "downloading", "transcribing", "extracting_frames", "classifying", "summarizing", "generating_three_stage"}
+
+
+def _validate_task_id(task_id: str) -> str:
+    """Validate that task_id matches UUID format."""
+    if not _UUID_RE.match(task_id):
+        raise HTTPException(status_code=400, detail="Invalid task_id format")
+    return task_id
 
 
 def _extract_url(text: str) -> str:
@@ -44,7 +69,7 @@ def _extract_url(text: str) -> str:
     return m.group(0) if m else text.strip()
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.get("/health", response_model=HealthResponse, dependencies=[])
 async def health():
     return HealthResponse()
 
@@ -69,6 +94,11 @@ async def summarize(req: SummarizeRequest):
 @router.post("/api/summarize/batch", response_model=BatchSummarizeResponse, status_code=202)
 async def summarize_batch(req: BatchSummarizeRequest):
     """Submit multiple URLs for summarization. Invalid URLs are skipped."""
+    # Check pending task count before accepting batch
+    pending_count = sum(1 for t in db.list_tasks_light() if t.get("status") in _ACTIVE_STATUSES)
+    if pending_count >= 20:
+        raise HTTPException(status_code=429, detail=f"Too many pending tasks ({pending_count}). Please wait for existing tasks to complete.")
+
     created = []
     skipped = []
 
@@ -197,6 +227,7 @@ async def list_tasks():
 @router.get("/api/tasks/{task_id}/status")
 async def get_task_status(task_id: str):
     """Lightweight polling endpoint: returns only status and progress."""
+    _validate_task_id(task_id)
     status = db.get_task_status(task_id)
     if not status:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -206,6 +237,7 @@ async def get_task_status(task_id: str):
 @router.get("/api/tasks/{task_id}/stream")
 async def stream_task_summary(task_id: str):
     """SSE endpoint: stream summary chunks as they are generated via asyncio.Queue."""
+    _validate_task_id(task_id)
     task = db.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -228,6 +260,7 @@ async def stream_task_summary(task_id: str):
 
 @router.get("/api/tasks/{task_id}", response_model=TaskDetail)
 async def get_task(task_id: str):
+    _validate_task_id(task_id)
     task = db.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -250,6 +283,7 @@ async def get_task(task_id: str):
 @router.put("/api/tasks/{task_id}/favorite")
 async def set_task_favorite(task_id: str, body: FavoriteRequest):
     """Toggle favorite status."""
+    _validate_task_id(task_id)
     _get_task_or_404(task_id)
     db.set_favorite(task_id, body.favorite)
     return {"task_id": task_id, "favorite": body.favorite}
@@ -290,6 +324,7 @@ async def delete_storage(older_than: str | None = Query(None, description="e.g. 
 # ============================================================
 
 def _get_task_or_404(task_id: str) -> dict:
+    _validate_task_id(task_id)
     task = db.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -411,6 +446,7 @@ async def get_review_doc(task_id: str):
 @router.post("/api/tasks/{task_id}/retry", response_model=TaskResponse, status_code=202)
 async def retry_task(task_id: str):
     """Retry a failed task. Resets status and re-runs the pipeline."""
+    _validate_task_id(task_id)
     task = _get_task_or_404(task_id)
     if task["status"] != "failed":
         raise HTTPException(status_code=400, detail="Only failed tasks can be retried")
@@ -427,12 +463,10 @@ async def retry_task(task_id: str):
     return TaskResponse(task_id=task_id, status=TaskStatus.PENDING)
 
 
-_ACTIVE_STATUSES = {"pending", "downloading", "transcribing", "extracting_frames", "classifying", "summarizing"}
-
-
 @router.delete("/api/tasks/{task_id}")
 async def delete_task(task_id: str):
     """Delete a task and its associated files."""
+    _validate_task_id(task_id)
     task = _get_task_or_404(task_id)
     if task["status"] in _ACTIVE_STATUSES:
         raise HTTPException(status_code=409, detail="Cannot delete a task that is still processing")
@@ -629,17 +663,19 @@ async def publish_reviews(body: dict):
     try:
         result = _publish(task_ids)
     except PublishError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Publish failed: %s", e)
+        raise HTTPException(status_code=400, detail="Publish operation failed")
     return result
 
 
 @router.delete("/api/publish/{task_id}")
 async def unpublish_review(task_id: str):
     """Remove a published review from GitHub Pages."""
+    _validate_task_id(task_id)
     from core.github.publisher import PublishError, unpublish_review as _unpublish
     try:
         result = _unpublish(task_id)
     except PublishError as e:
-        status = 404 if "never published" in str(e).lower() else 400
-        raise HTTPException(status_code=status, detail=str(e))
+        logger.error("Unpublish failed for %s: %s", task_id[:8], e)
+        raise HTTPException(status_code=400, detail="Unpublish operation failed")
     return result

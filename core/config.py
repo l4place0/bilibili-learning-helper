@@ -4,8 +4,9 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Server
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
+    api_secret: str = ""
 
     # LLM
     llm_provider: str = "openai"
@@ -36,6 +37,18 @@ class Settings(BaseSettings):
     max_frames: int = 10
     frame_interval: int = 30
     scene_threshold: float = 0.3
+    frame_format: str = "webp"
+    frame_quality: int = 85
+    frame_width: int = 1280
+    min_gap: float = 5.0
+    max_scene_per_seg: int = 2
+    segments: int = 60
+
+    # GitHub Pages publish
+    github_repo: str = ""              # "user/video-reviews"
+    github_token: str = ""             # PAT with repo scope
+    github_branch: str = "gh-pages"
+    github_pages_url: str = ""         # "https://user.github.io/video-reviews"
 
     # Storage
     data_dir: Path = Path("data")
@@ -61,8 +74,16 @@ class Settings(BaseSettings):
     def frames_dir(self) -> Path:
         return self.cache_dir / "frames"
 
+    @property
+    def log_dir(self) -> Path:
+        return self.data_dir / "logs"
+
+    @property
+    def github_repo_dir(self) -> Path:
+        return self.data_dir / "github-repo"
+
     def ensure_dirs(self) -> None:
-        for d in [self.data_dir, self.cache_dir, self.audio_dir, self.transcript_dir, self.frames_dir]:
+        for d in [self.data_dir, self.cache_dir, self.audio_dir, self.transcript_dir, self.frames_dir, self.log_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

@@ -49,4 +49,4 @@ app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="web")
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("core.main:app", host=settings.host, port=settings.port, reload=True)
+    uvicorn.run("core.main:app", host=settings.host, port=settings.port)

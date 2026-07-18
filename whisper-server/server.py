@@ -6,11 +6,14 @@ Requires: faster-whisper, fastapi, uvicorn, python-multipart
 
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Header, UploadFile
 from fastapi.responses import JSONResponse
+
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -44,19 +47,39 @@ async def health():
 
 
 @app.post("/transcribe")
-async def transcribe(audio: UploadFile = File(...), language: str = Form("zh")):
+async def transcribe(
+    audio: UploadFile = File(...),
+    language: str = Form("zh"),
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+):
     """Transcribe uploaded audio file. Returns text with [MM:SS] timestamps."""
+    # Auth check
+    expected_key = os.environ.get("WHISPER_API_KEY", "")
+    if expected_key and x_api_key != expected_key:
+        return JSONResponse(status_code=401, content={"error": "Invalid or missing API key"})
+
     if _model is None:
         return JSONResponse(status_code=503, content={"error": "Model not loaded"})
 
+    # File size check
+    content = await audio.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        return JSONResponse(status_code=413, content={"error": "File too large (max 50MB)"})
+
+    # Sanitize filename: keep only safe characters
+    raw_name = audio.filename or "audio.wav"
+    safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", Path(raw_name).name)
+    if not safe_name:
+        safe_name = "audio.wav"
+    suffix = Path(safe_name).suffix or ".wav"
+
     # Save uploaded file to temp
-    suffix = Path(audio.filename or "audio.wav").suffix
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await audio.read())
+        tmp.write(content)
         tmp_path = tmp.name
 
     try:
-        logger.info("Transcribing: %s (lang=%s)", audio.filename, language)
+        logger.info("Transcribing: %s (lang=%s)", safe_name, language)
         segments, info = _model.transcribe(tmp_path, language=language, beam_size=5)
 
         lines = []
@@ -75,6 +98,6 @@ async def transcribe(audio: UploadFile = File(...), language: str = Form("zh")):
         }
     except Exception as e:
         logger.error("Transcription failed: %s", e)
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Transcription failed"})
     finally:
         os.unlink(tmp_path)

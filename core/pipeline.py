@@ -20,6 +20,10 @@ from core.workers import _shutdown
 logger = logging.getLogger(__name__)
 
 
+# Per-group locks to prevent duplicate synthesis runs
+_synthesis_locks: dict[str, threading.Lock] = {}
+
+
 class MetricsTracker:
     """Track resource usage metrics for pipeline stages."""
 
@@ -29,17 +33,35 @@ class MetricsTracker:
         self._total_start: float = time.monotonic()
 
     def start_stage(self, stage: str):
+        """Record the start time for a pipeline stage.
+
+        Args:
+            stage: Stage name (e.g. "download", "transcribe", "classify").
+        """
         self._stage_start = time.monotonic()
         if stage not in self.metrics:
             self.metrics[stage] = {}
 
     def end_stage(self, stage: str, **extra):
+        """Record the end time and optional extra metrics for a pipeline stage.
+
+        Args:
+            stage: Stage name (must match a prior ``start_stage`` call).
+            **extra: Arbitrary key-value pairs to attach to this stage's metrics
+                     (e.g. file_size_bytes, text_length, frame_count, api_calls).
+        """
         duration_ms = int((time.monotonic() - self._stage_start) * 1000)
         self.metrics[stage]["duration_ms"] = duration_ms
         for k, v in extra.items():
             self.metrics[stage][k] = v
 
     def finish(self) -> dict:
+        """Finalize metrics by recording total elapsed time.
+
+        Returns:
+            The complete metrics dict with per-stage durations and a
+            ``total_duration_ms`` key.
+        """
         self.metrics["total_duration_ms"] = int((time.monotonic() - self._total_start) * 1000)
         return self.metrics
 
@@ -55,9 +77,20 @@ def get_stream_chunks(task_id: str) -> list[str]:
 
 
 def _stream_callback(task_id: str, chunk: str):
-    """Called by LLM for each streaming chunk."""
+    """Called by the LLM layer for each streaming text chunk during summary generation.
+
+    Appends the chunk to an in-memory buffer keyed by task_id (for the SSE
+    endpoint) and publishes it to asyncio.Queue subscribers so that connected
+    clients receive incremental updates in real time.
+
+    Args:
+        task_id: The task whose stream this chunk belongs to.
+        chunk: A piece of generated summary text.
+    """
     with _stream_lock:
-        _stream_buffers.setdefault(task_id, []).append(chunk)
+        buf = _stream_buffers.setdefault(task_id, [])
+        if len(buf) < 1000:
+            buf.append(chunk)
     # Also publish to queue-based subscribers
     try:
         from core.streaming import publish as _publish
@@ -73,7 +106,20 @@ def _cleanup_stream(task_id: str):
 
 
 def _build_metadata_context(metadata: dict, lang: str = "zh") -> str:
-    """Build a supplementary context string from video metadata for LLM prompts."""
+    """Build a supplementary context string from video metadata for LLM prompts.
+
+    Extracts the video description and tags from the metadata dict and formats
+    them as labeled sections that are prepended to the transcript when
+    constructing the enriched prompt for classification and summarization.
+
+    Args:
+        metadata: Video metadata dict (may contain "description" and "tags" keys).
+        lang: Language code -- determines section labels ("zh" for Chinese, "en" for English).
+
+    Returns:
+        A context string with labeled description and tags sections, joined
+        by double newlines. Returns an empty string if neither is present.
+    """
     parts = []
     desc = metadata.get("description", "").strip()
     if desc:
@@ -100,7 +146,21 @@ def get_platform(url: str) -> BasePlatform:
 
 
 def _try_cache(db: Storage, url: str, task_id: str) -> tuple[str, dict] | None:
-    """Try to find cached audio and transcript for the same video."""
+    """Attempt to reuse cached audio, transcript, and frames from a previous task.
+
+    Looks up a completed task with the same video_id in the database. If found
+    and the cached files still exist on disk, copies them into the new task's
+    directories so the download and ASR stages can be skipped entirely.
+
+    Args:
+        db: Storage instance for database lookups.
+        url: Source video URL (used to extract the platform video_id).
+        task_id: The new task's UUID -- cached files are copied into this
+                 task's directories.
+
+    Returns:
+        A (transcript_text, metadata_dict) tuple if cache hit, or None on miss.
+    """
     platform = get_platform(url)
     video_id = platform.parse_url(url)
     cached = db.find_cached_task(video_id)
@@ -137,7 +197,27 @@ def _try_cache(db: Storage, url: str, task_id: str) -> tuple[str, dict] | None:
 
 
 def run_pipeline(task_id: str, url: str, language: str, llm_provider: str, detail: str, mode: str = "multimodal") -> None:
-    """Run the full pipeline for a task. Called in background."""
+    """Run the full summarization pipeline for a task in a background thread.
+
+    Orchestrates the end-to-end flow: download audio/video from the source
+    platform, transcribe with ASR, optionally extract video frames, classify
+    content type with the LLM, and generate three-stage learning materials
+    (preview + index + summary). Results are persisted to the database and
+    published to SSE subscribers.
+
+    The function checks a global shutdown signal at two points (after
+    download/transcribe and after classify) to allow graceful abort during
+    server shutdown.
+
+    Args:
+        task_id: UUID string identifying this task.
+        url: Source video URL (Bilibili or YouTube).
+        language: Language code for ASR and LLM prompts (e.g. "zh", "en", "ja").
+        llm_provider: LLM provider name ("openai" or "claude").
+        detail: Summary detail level ("brief", "normal", "detailed").
+        mode: Processing mode -- "audio" for text-only, "multimodal" to include
+              video frame extraction and vision-capable LLM calls.
+    """
     db = get_storage()
     asr = get_asr()
     tracker = MetricsTracker()
@@ -324,16 +404,17 @@ def run_pipeline(task_id: str, url: str, language: str, llm_provider: str, detai
     except Exception as e:
         logger.exception("[%s] Failed: %s", task_id[:8], e)
         now = datetime.now(timezone.utc).isoformat()
+        error_msg = "Pipeline execution failed"
         # Save partial metrics even on failure
         try:
             metadata["metrics"] = tracker.finish()
-            db.update_task(task_id, status="failed", error=str(e), completed_at=now, metadata=metadata)
+            db.update_task(task_id, status="failed", error=error_msg, completed_at=now, metadata=metadata)
         except Exception:
-            db.update_task(task_id, status="failed", error=str(e), completed_at=now)
+            db.update_task(task_id, status="failed", error=error_msg, completed_at=now)
         # Publish failure event to SSE subscribers
         try:
             from core.streaming import publish as _publish
-            _publish(task_id, {"done": True, "error": str(e)})
+            _publish(task_id, {"done": True, "error": error_msg})
         except Exception:
             pass
     finally:
@@ -355,9 +436,24 @@ def _maybe_trigger_synthesis(group_id: str, language: str, llm_provider: str) ->
     existing = db.get_group_synthesis(group_id)
     if existing:
         return
+    # Acquire per-group lock to prevent duplicate synthesis triggers
+    lock = _synthesis_locks.setdefault(group_id, threading.Lock())
+    if not lock.acquire(blocking=False):
+        return  # another thread is already running synthesis for this group
     logger.info("All tasks in group %s are done, triggering synthesis", group_id)
-    thread = threading.Thread(target=run_synthesis, args=(group_id, language, llm_provider), daemon=True)
+    thread = threading.Thread(
+        target=_run_synthesis_with_lock, args=(lock, group_id, language, llm_provider), daemon=True,
+    )
     thread.start()
+
+
+def _run_synthesis_with_lock(lock: threading.Lock, group_id: str, language: str, llm_provider: str) -> None:
+    """Wrapper that releases the group lock after synthesis completes."""
+    try:
+        run_synthesis(group_id, language, llm_provider)
+    finally:
+        lock.release()
+        _synthesis_locks.pop(group_id, None)
 
 
 def run_synthesis(group_id: str, language: str, llm_provider: str) -> str | None:
@@ -437,5 +533,5 @@ def run_synthesis(group_id: str, language: str, llm_provider: str) -> str | None
     except Exception as e:
         logger.exception("Synthesis failed for group %s: %s", group_id, e)
         now = datetime.now(timezone.utc).isoformat()
-        db.update_task(synthesis_task_id, status="failed", error=str(e), completed_at=now, metadata=synthesis_meta)
+        db.update_task(synthesis_task_id, status="failed", error="Synthesis failed", completed_at=now, metadata=synthesis_meta)
         return None

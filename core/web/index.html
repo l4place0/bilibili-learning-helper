@@ -62,10 +62,12 @@
                     <div id="result-actions">
                         <button id="export-markdown" class="ghost-btn hidden">Export Markdown</button>
                         <button id="export-review-doc" class="ghost-btn hidden">Generate Review Doc</button>
+                        <button id="publish-btn" class="ghost-btn hidden">Publish</button>
                         <button id="toggle-transcript" class="hidden">Show Transcript</button>
                         <button id="show-frames" class="hidden">View Frames</button>
                         <button id="delete-task-btn" class="danger-btn hidden">Delete Task</button>
                     </div>
+                    <div id="publish-banner" class="hidden"></div>
                     <pre id="result-transcript" class="hidden"></pre>
                     <div id="result-frames" class="hidden"></div>
                     <div id="result-metrics" class="hidden"></div>
@@ -81,6 +83,11 @@
                 <div class="section-header">
                     <h2>Task History</h2>
                     <span id="auto-cleanup-hint" class="hint-text">Auto-cleanup: video 1d / data 7d (favorites preserved)</span>
+                    <div id="batch-actions" class="hidden">
+                        <button id="batch-publish-btn" class="ghost-btn small-btn">批量发布</button>
+                        <button id="batch-unpublish-btn" class="ghost-btn small-btn">批量取消发布</button>
+                        <span id="batch-count" class="hint-text"></span>
+                    </div>
                     <button id="cleanup-btn" class="danger-btn">Clear Storage</button>
                 </div>
                 <div id="history-filters">
@@ -101,11 +108,13 @@
                     <table id="history-table">
                         <thead>
                             <tr>
+                                <th><input type="checkbox" id="select-all-tasks"></th>
                                 <th></th>
                                 <th>Time</th>
                                 <th>Title</th>
                                 <th>Tags</th>
                                 <th>Status</th>
+                                <th>Published</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -192,6 +201,29 @@
             </section>
         </div>
     </main>
+
+    <!-- Publish dialog -->
+    <div id="publish-dialog" class="dialog-overlay hidden">
+        <div class="dialog-box">
+            <h3 id="publish-dialog-title">发布到 GitHub Pages</h3>
+            <div id="publish-dialog-body"></div>
+            <div id="publish-dialog-actions" class="dialog-actions">
+                <button id="publish-cancel" class="ghost-btn">取消</button>
+                <button id="publish-confirm" class="small-btn">确认发布</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Batch progress dialog -->
+    <div id="batch-dialog" class="dialog-overlay hidden">
+        <div class="dialog-box">
+            <h3>批量发布</h3>
+            <div id="batch-progress-body"></div>
+            <div class="dialog-actions">
+                <button id="batch-close" class="ghost-btn hidden">关闭</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Frame lightbox -->
     <div id="lightbox" class="hidden" onclick="closeLightbox()">

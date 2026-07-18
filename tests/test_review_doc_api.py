@@ -175,7 +175,7 @@ class TestPromptEnhancement:
 
     def test_detailed_max_tokens_increased(self):
         from core.llm.prompts import DETAIL_MAX_TOKENS
-        assert DETAIL_MAX_TOKENS["detailed"] == 10240
+        assert DETAIL_MAX_TOKENS["detailed"] == 20480
 
     def test_card_parser_roundtrip(self):
         from core.review_doc import parse_review_cards

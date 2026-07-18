@@ -456,6 +456,117 @@ DETAIL_MAX_TOKENS = {
 CONTENT_TYPES = {"tutorial", "tech_talk", "demo", "review", "news", "vlog", "general"}
 
 # ============================================================
+# Three-stage learning prompt (preview + index + summary)
+# ============================================================
+
+THREE_STAGE_PROMPT = {
+    "zh": """你是一个视频学习助手。根据以下视频转录文本，生成三份结构化学习材料。
+
+请严格返回以下 JSON 格式，不要包含其他内容：
+
+```json
+{{
+  "preview": {{
+    "overview": "2-3 句话概述视频主题和范围，不要剧透核心解答",
+    "questions": ["核心问题1：观众带着这个问题去看视频", "核心问题2", "核心问题3"],
+    "pre_quiz": [
+      {{"question": "前置知识测验题", "options": ["A. 选项1", "B. 选项2", "C. 选项3", "D. 选项4"], "answer": "A", "explanation": "简短解释"}}
+    ]
+  }},
+  "index": [
+    {{"time_seconds": 225, "time_display": "03:45", "label": "知识点标题", "detail": "一句话说明这个知识点"}}
+  ],
+  "summary": {{
+    "text": "完整的 Markdown 格式总结（包含核心主题、关键要点、详细分析、结论等章节）",
+    "cards": [
+      {{"question": "复习问题", "answer": "简明答案", "difficulty": 3, "bloom_level": "understand"}}
+    ],
+    "post_quiz": [
+      {{"question": "视频内容回忆题", "options": ["A. 选项1", "B. 选项2", "C. 选项3", "D. 选项4"], "answer": "B", "explanation": "简短解释"}}
+    ],
+    "weak_points": ["值得深入学习的知识点1", "知识点2"]
+  }}
+}}
+```
+
+要求：
+- preview.overview：只给框架，不给核心解答
+- preview.questions：3-5 个引导性问题，让观众带着问题去看
+- preview.pre_quiz：3-5 道前置知识选择题，不考视频内容
+- index：5-20 个关键知识点，按时间顺序排列，time_seconds 是秒数
+- summary.text：完整的结构化总结，用 Markdown 格式
+- summary.cards：5-8 组复习卡片，覆盖视频核心知识
+- summary.post_quiz：3-5 道选择题，考察对视频内容的理解
+- summary.weak_points：1-3 个值得深入学习的点
+
+{detail_instruction}
+{citation_instruction}
+
+[转录文本]
+{transcript}""",
+    "en": """You are a video learning assistant. Based on the following video transcript, generate three structured learning materials.
+
+Return strictly the following JSON format, no other content:
+
+```json
+{{
+  "preview": {{
+    "overview": "2-3 sentence overview of the video topic and scope, do not reveal core answers",
+    "questions": ["Core question 1: viewer watches with this question in mind", "Core question 2", "Core question 3"],
+    "pre_quiz": [
+      {{"question": "Prerequisite knowledge question", "options": ["A. Option 1", "B. Option 2", "C. Option 3", "D. Option 4"], "answer": "A", "explanation": "Brief explanation"}}
+    ]
+  }},
+  "index": [
+    {{"time_seconds": 225, "time_display": "03:45", "label": "Knowledge point title", "detail": "One-sentence description"}}
+  ],
+  "summary": {{
+    "text": "Full Markdown-formatted summary (with sections for core topic, key points, detailed analysis, conclusion, etc.)",
+    "cards": [
+      {{"question": "Review question", "answer": "Concise answer", "difficulty": 3, "bloom_level": "understand"}}
+    ],
+    "post_quiz": [
+      {{"question": "Video content recall question", "options": ["A. Option 1", "B. Option 2", "C. Option 3", "D. Option 4"], "answer": "B", "explanation": "Brief explanation"}}
+    ],
+    "weak_points": ["Knowledge point worth deeper study 1", "Point 2"]
+  }}
+}}
+```
+
+Requirements:
+- preview.overview: give framework only, no core answers
+- preview.questions: 3-5 guiding questions for the viewer
+- preview.pre_quiz: 3-5 prerequisite multiple-choice questions, not about video content
+- index: 5-20 key knowledge points in chronological order, time_seconds in seconds
+- summary.text: full structured summary in Markdown format
+- summary.cards: 5-8 review cards covering core video knowledge
+- summary.post_quiz: 3-5 multiple-choice questions testing video comprehension
+- summary.weak_points: 1-3 points worth deeper study
+
+{detail_instruction}
+{citation_instruction}
+
+[Transcript]
+{transcript}""",
+}
+
+
+def get_three_stage_prompt(lang: str = "zh", detail: str = "normal", has_segments: bool = False) -> str:
+    """Get the three-stage learning prompt (preview + index + summary)."""
+    prompt = THREE_STAGE_PROMPT.get(lang, THREE_STAGE_PROMPT["zh"])
+    # Detail instruction
+    detail_map = {
+        "brief": {"zh": "summary.text 控制在 500 字以内，index 不超过 10 条。", "en": "summary.text under 500 words, index no more than 10 entries."},
+        "normal": {"zh": "", "en": ""},
+        "detailed": {"zh": "summary.text 请详尽展开，包含具体例子和数据引用。", "en": "summary.text should be thorough with specific examples and data references."},
+    }
+    detail_instr = detail_map.get(detail, detail_map["normal"]).get(lang, "")
+    # Citation instruction
+    citation = CITATION_INSTRUCTION.get(lang, CITATION_INSTRUCTION["zh"]) if has_segments else ""
+    return prompt.format(transcript="{transcript}", detail_instruction=detail_instr, citation_instruction=citation)
+
+
+# ============================================================
 # Stage 3: Question generation
 # ============================================================
 

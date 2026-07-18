@@ -1,5 +1,6 @@
 import logging
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -310,27 +311,33 @@ def extract_frames(
     if mode == "scene":
         BasePlatform.check_ffmpeg()
 
+    managed_tmp = False
     if output_dir:
         tmp_dir = output_dir
         tmp_dir.mkdir(parents=True, exist_ok=True)
     else:
         tmp_dir = Path(tempfile.mkdtemp(prefix="frames_"))
+        managed_tmp = True
 
     fmt = settings.frame_format
     quality = settings.frame_quality
     width = settings.frame_width
 
-    if mode == "hybrid":
-        return _extract_frames_hybrid(
-            video_path, tmp_dir,
-            segments=settings.segments,
-            max_scene_per_seg=settings.max_scene_per_seg,
-            scene_threshold=settings.scene_threshold,
-            min_gap=settings.min_gap,
-            width=width, fmt=fmt, quality=quality,
-        )
-    if mode == "scene":
-        return _extract_frames_scene(video_path, tmp_dir, max_frames or 20, scene_threshold, width, fmt, quality)
-    if mode == "fps":
-        return _extract_frames_fps(video_path, tmp_dir, max_frames or 20, interval, width, fmt, quality)
-    return _extract_frames_timestamp(video_path, tmp_dir, max_frames or 20, interval, width, fmt, quality)
+    try:
+        if mode == "hybrid":
+            return _extract_frames_hybrid(
+                video_path, tmp_dir,
+                segments=settings.segments,
+                max_scene_per_seg=settings.max_scene_per_seg,
+                scene_threshold=settings.scene_threshold,
+                min_gap=settings.min_gap,
+                width=width, fmt=fmt, quality=quality,
+            )
+        if mode == "scene":
+            return _extract_frames_scene(video_path, tmp_dir, max_frames or 20, scene_threshold, width, fmt, quality)
+        if mode == "fps":
+            return _extract_frames_fps(video_path, tmp_dir, max_frames or 20, interval, width, fmt, quality)
+        return _extract_frames_timestamp(video_path, tmp_dir, max_frames or 20, interval, width, fmt, quality)
+    finally:
+        if managed_tmp:
+            shutil.rmtree(tmp_dir, ignore_errors=True)

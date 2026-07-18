@@ -2,6 +2,7 @@ import base64
 import logging
 from pathlib import Path
 
+import httpx
 from openai import OpenAI
 
 from core.config import settings
@@ -16,7 +17,11 @@ class OpenAILLM(BaseLLM):
     def __init__(self):
         if not settings.openai_api_key:
             raise ValueError("OPENAI_API_KEY is not configured")
-        self.client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
+        self.client = OpenAI(
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            timeout=httpx.Timeout(timeout=120.0),
+        )
 
     def _chat(self, prompt: str, max_tokens: int = 4096) -> str:
         response = self.client.chat.completions.create(

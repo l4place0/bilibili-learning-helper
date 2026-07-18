@@ -112,21 +112,38 @@ def generate_review_doc(task: dict, cards: list[dict], frames: list[dict]) -> st
     if meta_questions:
         all_questions.extend(meta_questions)
 
+    # Three-stage data (preview + index + summary)
+    preview = metadata.get("preview")
+    index_entries = metadata.get("index")
+
+    # Build video URL base for external links
+    from core.platforms import build_video_url
+    platform_name = task.get("platform", "")
+    video_id = metadata.get("video_id", "")
+    video_url_base = build_video_url(platform_name, video_id) or task.get("url", "")
+
     # Build data for JS injection
     review_data = {
         "taskId": task.get("task_id", ""),
         "title": metadata.get("title", "Untitled"),
         "url": task.get("url", ""),
-        "platform": task.get("platform", ""),
+        "platform": platform_name,
         "summary": task.get("summary", ""),
         "transcriptSegments": transcript_segments,
         "cards": all_questions,
         "frames": frames,
         "metadata": metadata,
+        "preview": preview,
+        "index": index_entries,
+        "videoUrlBase": video_url_base,
+        "hasThreeStage": preview is not None and index_entries is not None,
     }
 
+    json_str = json.dumps(review_data, ensure_ascii=False)
+    # Escape HTML-significant chars to prevent stored XSS via | safe filter
+    json_str = json_str.replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     return template.render(
-        review_data_json=json.dumps(review_data, ensure_ascii=False),
+        review_data_json=json_str,
         review_data=review_data,
     )
 

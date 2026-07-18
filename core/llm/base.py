@@ -7,6 +7,7 @@ from core.llm.prompts import (
     CONTENT_TYPES,
     get_classify_prompt,
     get_summary_prompt,
+    get_three_stage_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,3 +80,85 @@ class BaseLLM(ABC):
     ) -> str:
         """Stage 2: Summarize with video + structured prompt. Default: fall back to text-only."""
         return self.summarize(transcript, lang, detail, content_type=content_type, has_segments=has_segments)
+
+    def generate_three_stage(self, transcript: str, lang: str = "zh", detail: str = "normal", has_segments: bool = False) -> dict:
+        """Generate three-stage learning materials (preview + index + summary) in one call.
+
+        Returns dict with keys: preview, index, summary.
+        Falls back to regex extraction if JSON parsing fails.
+        """
+        from core.llm.prompts import DETAIL_MAX_TOKENS
+        prompt = get_three_stage_prompt(lang, detail, has_segments).format(transcript=transcript)
+        max_tokens = DETAIL_MAX_TOKENS.get(detail, 8192)
+        # Three-stage output is longer than plain summary
+        max_tokens = max(max_tokens, 8192)
+
+        for attempt in range(3):
+            try:
+                raw = self._chat(prompt, max_tokens=max_tokens)
+                if not raw or not raw.strip():
+                    logger.warning("Three-stage attempt %d: empty response, retrying", attempt + 1)
+                    continue
+                result = self._parse_three_stage_json(raw)
+                if self._validate_three_stage(result):
+                    return result
+                logger.warning("Three-stage attempt %d: validation failed, fields missing", attempt + 1)
+                # Return partial result if at least one section exists
+                if any(result.get(k) for k in ("preview", "index", "summary")):
+                    return self._fill_three_stage_defaults(result)
+            except json.JSONDecodeError as e:
+                logger.warning("Three-stage attempt %d: JSON parse error (%s)", attempt + 1, e)
+            except Exception as e:
+                logger.warning("Three-stage attempt %d: error (%s)", attempt + 1, e)
+
+        # All attempts failed — return empty structure
+        logger.warning("Three-stage generation failed after 3 attempts, returning empty structure")
+        return self._empty_three_stage()
+
+    @staticmethod
+    def _parse_three_stage_json(raw: str) -> dict:
+        """Parse JSON from LLM response, handling markdown code blocks."""
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        # Try to find JSON object in the response
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            text = text[start:end]
+        return json.loads(text)
+
+    @staticmethod
+    def _validate_three_stage(result: dict) -> bool:
+        """Check that all three sections exist and are non-empty."""
+        has_preview = bool(result.get("preview", {}).get("overview"))
+        has_index = bool(result.get("index")) and isinstance(result.get("index"), list)
+        has_summary = bool(result.get("summary", {}).get("text"))
+        return has_preview and has_index and has_summary
+
+    @staticmethod
+    def _fill_three_stage_defaults(result: dict) -> dict:
+        """Fill missing fields with defaults."""
+        defaults = BaseLLM._empty_three_stage()
+        for key in ("preview", "index", "summary"):
+            if not result.get(key):
+                result[key] = defaults[key]
+            elif key == "preview":
+                result[key].setdefault("overview", "")
+                result[key].setdefault("questions", [])
+                result[key].setdefault("pre_quiz", [])
+            elif key == "summary":
+                result[key].setdefault("text", "")
+                result[key].setdefault("cards", [])
+                result[key].setdefault("post_quiz", [])
+                result[key].setdefault("weak_points", [])
+        return result
+
+    @staticmethod
+    def _empty_three_stage() -> dict:
+        """Return an empty three-stage structure."""
+        return {
+            "preview": {"overview": "", "questions": [], "pre_quiz": []},
+            "index": [],
+            "summary": {"text": "", "cards": [], "post_quiz": [], "weak_points": []},
+        }
