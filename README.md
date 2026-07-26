@@ -30,10 +30,10 @@ bootstrap 脚本使用宿主自带的 Python 识别当前平台并下载固定�
 GitHub Release；安装后的 CLI 不依赖宿主 Python：
 
 ```bash
-python skill/scripts/bootstrap.py status
-python skill/scripts/bootstrap.py install
+python3 skill/scripts/bootstrap.py status
+python3 skill/scripts/bootstrap.py install
 # 审核输出中的版本、URL、SHA-256 和目标路径后：
-python skill/scripts/bootstrap.py install --apply
+python3 skill/scripts/bootstrap.py install --apply
 ```
 
 发布包按平台提供统一结构：

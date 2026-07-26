@@ -14,8 +14,9 @@ Use `video-sum` as the only business-operation interface. Interpret the user's
 intent, choose explicit arguments, execute the CLI, and report its structured
 result.
 
-Before the first operation, run `python scripts/bootstrap.py status`. Use the
-exact absolute executable returned in `command` for every CLI invocation. If
+Before the first operation, run `python3 scripts/bootstrap.py status` on
+macOS/Linux (`py -3 scripts/bootstrap.py status` on Windows). Use the exact
+absolute executable returned in `command` for every CLI invocation. If
 the runtime is missing or broken, read
 [environment-recovery.md](references/environment-recovery.md), show the
 pinned GitHub Release download plan, and obtain explicit approval before using

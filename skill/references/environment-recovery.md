@@ -5,9 +5,11 @@ broken.
 
 ## State machine
 
-1. Run `python scripts/bootstrap.py status`.
+1. Run `python3 scripts/bootstrap.py status` on macOS/Linux, or
+   `py -3 scripts/bootstrap.py status` on Windows.
 2. If `ready` is true, use the exact absolute executable in `command`.
-3. If the CLI is missing, run `python scripts/bootstrap.py install` without
+3. If the CLI is missing, run `python3 scripts/bootstrap.py install` on
+   macOS/Linux (or `py -3 scripts/bootstrap.py install` on Windows) without
    `--apply` and show the pinned release URL, checksum URL, target, and
    destination to the user.
 4. After explicit approval, rerun with `--apply`.
@@ -35,7 +37,7 @@ Override the source only when the user or trusted deployment configuration
 explicitly supplies it:
 
 ```bash
-python scripts/bootstrap.py install \
+python3 scripts/bootstrap.py install \
   --repository "trusted-owner/trusted-repository" \
   --version "1.2.3"
 ```

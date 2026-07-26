@@ -29,10 +29,10 @@ pinned platform-specific GitHub Release; the installed CLI does not depend on
 the host Python:
 
 ```bash
-python skill/scripts/bootstrap.py status
-python skill/scripts/bootstrap.py install
+python3 skill/scripts/bootstrap.py status
+python3 skill/scripts/bootstrap.py install
 # After reviewing the version, URLs, checksum, and destination:
-python skill/scripts/bootstrap.py install --apply
+python3 skill/scripts/bootstrap.py install --apply
 ```
 
 Each bundle contains the Python runtime, Python dependencies, yt-dlp, the
