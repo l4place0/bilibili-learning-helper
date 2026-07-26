@@ -1,7 +1,7 @@
-"""Tests for CLI commands and output utilities."""
+"""Tests for the core video-sum CLI."""
+
 import json
-import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
@@ -9,160 +9,108 @@ from click.testing import CliRunner
 from cli.output import emit, emit_error
 
 
-class TestOutput:
-    """Test JSON output utilities."""
-
-    def test_emit_json_line(self, capsys):
-        emit("test_event", key="value")
-        out = capsys.readouterr().out.strip()
-        data = json.loads(out)
-        assert data["event"] == "test_event"
-        assert data["key"] == "value"
-
-    def test_emit_unicode(self, capsys):
-        emit("test", title="测试标题")
-        out = capsys.readouterr().out.strip()
-        data = json.loads(out)
-        assert data["title"] == "测试标题"
-
-    def test_emit_error_exits(self):
-        with pytest.raises(SystemExit) as exc_info:
-            emit_error("something broke")
-        assert exc_info.value.code == 1
-
-    def test_emit_error_custom_code(self):
-        with pytest.raises(SystemExit) as exc_info:
-            emit_error("fail", code=42)
-        assert exc_info.value.code == 42
+def test_emit_json_line(capsys):
+    emit("test_event", key="value")
+    data = json.loads(capsys.readouterr().out)
+    assert data["event"] == "test_event"
+    assert data["key"] == "value"
 
 
-class TestCLICommands:
-    """Test CLI command definitions."""
-
-    def test_run_help(self):
-        from cli import main
-        runner = CliRunner()
-        result = runner.invoke(main, ["run", "--help"])
-        assert result.exit_code == 0
-        assert "URL" in result.output or "url" in result.output
-
-    def test_serve_help(self):
-        from cli import main
-        runner = CliRunner()
-        result = runner.invoke(main, ["serve", "--help"])
-        assert result.exit_code == 0
-        assert "port" in result.output
-
-    def test_submit_help(self):
-        from cli import main
-        runner = CliRunner()
-        result = runner.invoke(main, ["submit", "--help"])
-        assert result.exit_code == 0
-
-    def test_status_help(self):
-        from cli import main
-        runner = CliRunner()
-        result = runner.invoke(main, ["status", "--help"])
-        assert result.exit_code == 0
-
-    def test_result_help(self):
-        from cli import main
-        runner = CliRunner()
-        result = runner.invoke(main, ["result", "--help"])
-        assert result.exit_code == 0
-
-    def test_version(self):
-        from cli import main
-        runner = CliRunner()
-        result = runner.invoke(main, ["--version"])
-        assert result.exit_code == 0
-        assert "0.1.0" in result.output
-
-    @patch("cli.commands._run_remote")
-    def test_run_with_remote(self, mock_remote):
-        from cli import main
-        runner = CliRunner()
-        runner.invoke(main, ["run", "https://bilibili.com/video/BV123", "--remote", "http://localhost:8000"])
-        mock_remote.assert_called_once()
-
-    @patch("cli.commands._free_port", return_value=9999)
-    @patch("cli.commands._start_server")
-    @patch("cli.commands._run_remote")
-    def test_run_local_starts_server(self, mock_remote, mock_start, mock_port):
-        from cli import main
-        runner = CliRunner()
-        runner.invoke(main, ["run", "https://bilibili.com/video/BV123"])
-        mock_start.assert_called_once_with(9999)
-        mock_remote.assert_called_once()
-
-    @patch("cli.commands.httpx.post")
-    def test_submit_success(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"task_id": "abc-123", "status": "pending"}
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        from cli import main
-        runner = CliRunner()
-        result = runner.invoke(main, ["submit", "https://bilibili.com/video/BV123", "--remote", "http://test:8000"])
-        assert result.exit_code == 0
-        assert "abc-123" in result.output
-
-    @patch("cli.commands.httpx.get")
-    def test_status_success(self, mock_get):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"task_id": "abc", "status": "done", "progress": 100}
-        mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
-
-        from cli import main
-        runner = CliRunner()
-        result = runner.invoke(main, ["status", "abc", "--remote", "http://test:8000"])
-        assert result.exit_code == 0
-        assert "done" in result.output
-
-    @patch("cli.commands.httpx.get")
-    def test_status_not_found(self, mock_get):
-        import httpx
-        mock_resp = MagicMock()
-        mock_resp.status_code = 404
-        mock_get.side_effect = httpx.HTTPStatusError("404", request=MagicMock(), response=mock_resp)
-
-        from cli import main
-        runner = CliRunner()
-        result = runner.invoke(main, ["status", "nonexist", "--remote", "http://test:8000"])
-        assert result.exit_code == 1
-        assert "not found" in result.output.lower() or "error" in result.output.lower()
-
-    @patch("cli.commands.httpx.get")
-    def test_result_success(self, mock_get):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"task_id": "abc", "summary": "test summary", "status": "done"}
-        mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
-
-        from cli import main
-        runner = CliRunner()
-        result = runner.invoke(main, ["result", "abc", "--remote", "http://test:8000"])
-        assert result.exit_code == 0
-        assert "test summary" in result.output
+def test_emit_unicode(capsys):
+    emit("test", title="测试标题")
+    assert json.loads(capsys.readouterr().out)["title"] == "测试标题"
 
 
-class TestFreePort:
-    """Test _free_port utility."""
+def test_emit_error_exits():
+    with pytest.raises(SystemExit) as exc_info:
+        emit_error("something broke", code=42)
+    assert exc_info.value.code == 42
 
-    def test_returns_int(self):
-        from cli.commands import _free_port
-        port = _free_port()
-        assert isinstance(port, int)
-        assert 1024 < port < 65535
 
-    def test_port_is_usable(self):
-        import socket
-        from cli.commands import _free_port
-        port = _free_port()
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            s.bind(("127.0.0.1", port))
-        finally:
-            s.close()
+def test_core_command_surface():
+    from cli import main
+
+    result = CliRunner().invoke(main, ["--help"])
+    assert result.exit_code == 0
+    for command in (
+        "asr",
+        "cache",
+        "capture",
+        "doctor",
+        "frames",
+        "library",
+        "resource",
+    ):
+        assert command in result.output
+    for removed in ("ingest", "run", "serve", "submit", "status", "result"):
+        assert removed not in result.output
+
+
+def test_version():
+    from cli import main
+
+    result = CliRunner().invoke(main, ["--version"])
+    assert result.exit_code == 0
+    assert "0.1.0" in result.output
+
+
+def test_doctor_reports_structured_checks(tmp_path):
+    from cli import main
+    from core.config import settings
+
+    with (
+        patch.object(settings, "library_dir", tmp_path),
+        patch.object(settings, "asr_provider", "whisper-cpp"),
+        patch.object(settings, "whisper_cpp_model", tmp_path / "model.bin"),
+        patch("cli.commands.shutil.which", return_value="/usr/local/bin/tool"),
+    ):
+        (tmp_path / "model.bin").write_bytes(b"model")
+        result = CliRunner().invoke(main, ["doctor"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["event"] == "doctor"
+    assert data["healthy"] is True
+
+
+def test_asr_profiles_reports_installed_models(tmp_path):
+    from cli import main
+    from core.config import settings
+
+    (tmp_path / "ggml-small-q5_1.bin").write_bytes(b"model")
+    with patch.object(settings, "asr_model_dir", tmp_path):
+        result = CliRunner().invoke(main, ["asr", "profiles"])
+
+    assert result.exit_code == 0
+    profiles = {item["name"]: item for item in json.loads(result.output)["profiles"]}
+    assert profiles["balanced"]["installed"] is True
+    assert profiles["fast"]["installed"] is False
+
+
+@patch("core.vision.frames.extract_frames_at")
+def test_frames_extract_accepts_explicit_timestamps(mock_extract, tmp_path):
+    from cli import main
+
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    output = tmp_path / "frames"
+    mock_extract.return_value = [output / "frame_0001.webp"]
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "frames",
+            "extract",
+            str(video),
+            "--at",
+            "01:30",
+            "--around",
+            "2",
+            "--output-dir",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert mock_extract.call_args.args[2] == [88.0, 90.0, 92.0]
+    assert json.loads(result.output)["event"] == "frames_extracted"

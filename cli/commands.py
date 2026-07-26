@@ -1,238 +1,500 @@
 """CLI subcommands for video-sum."""
 
-import atexit
+import importlib.util
 import logging
-import socket
+import os
+import shutil
 import sys
-import threading
-import time
+from pathlib import Path
 
 import click
-import httpx
 
 from cli.output import emit, emit_error
 
 # Redirect all logging to stderr so stdout stays clean JSON
 logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s: %(message)s")
 
-# Server lifecycle
-_server = None
+def _run_ingestion(
+    url: str,
+    lang: str,
+    asr_provider: str,
+    asr_profile: str,
+    output_dir: str,
+    frames: int,
+    force: bool,
+    frame_mode: str = "timestamp",
+    cache_policy: str = "reuse",
+):
+    """Run the framework-independent ingestion service and emit NDJSON."""
+    from core.asr.profiles import resolve_asr_profile
+    from core.config import settings
+    from core.ingestion import IngestionRequest, IngestionService
 
-
-def _free_port() -> int:
-    """Find a free TCP port."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _start_server(port: int):
-    """Start FastAPI app in a background thread. Returns the thread."""
-    global _server
-    from core.main import app
-    import uvicorn
-
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    _server = server
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-
-    # Register cleanup
-    atexit.register(lambda: setattr(server, "should_exit", True))
-
-    # Wait for server to be ready
-    url = f"http://127.0.0.1:{port}"
-    for _ in range(30):
-        try:
-            httpx.get(f"{url}/health", timeout=2)
-            return thread
-        except httpx.ConnectError:
-            time.sleep(0.5)
-    emit_error(f"Server failed to start on {url}")
-
-
-def _create_progress():
-    """Create a Rich progress bar if available, else None."""
-    try:
-        from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
-        return Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeElapsedColumn(),
-            file=sys.stderr,  # Keep stdout clean
+    destination = Path(output_dir).expanduser() if output_dir else settings.library_dir
+    asr_model_path = None
+    if asr_profile:
+        _profile, asr_model_path = resolve_asr_profile(
+            asr_profile, settings.asr_model_dir
         )
-    except ImportError:
-        return None
+        if not asr_model_path.is_file():
+            emit_error(
+                (
+                    f"ASR model for profile '{asr_profile}' is not installed: "
+                    f"{asr_model_path}. Place the model file at this path."
+                ),
+                code=2,
+                error_code="asr_model_missing",
+            )
+        asr_provider = "whisper-cpp"
+
+    def on_progress(stage: str, progress: int, message: str):
+        emit("stage", stage=stage, progress=progress, message=message)
+
+    emit(
+        "started",
+        source=url,
+        output_dir=str(destination),
+        asr_provider=asr_provider or "configured-default",
+        asr_profile=asr_profile or "configured-default",
+        asr_model=str(asr_model_path) if asr_model_path else "configured-default",
+    )
+    try:
+        record = IngestionService().ingest(
+            IngestionRequest(
+                source=url,
+                output_dir=destination,
+                language=lang,
+                asr_provider=asr_provider,
+                asr_profile=asr_profile,
+                asr_model_path=asr_model_path,
+                frame_count=frames,
+                frame_mode=frame_mode,
+                cache_policy=cache_policy,
+                force=force,
+            ),
+            progress=on_progress,
+        )
+    except FileExistsError as exc:
+        emit_error(str(exc), code=3, error_code="resource_exists")
+    except ValueError as exc:
+        emit_error(str(exc), code=2, error_code="invalid_input")
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Ingestion failed")
+        emit_error(str(exc), code=1, error_code="ingestion_failed")
+
+    emit("done", **record.to_dict())
 
 
 @click.command()
-@click.argument("url")
-@click.option("--lang", default="zh", help="Language (zh/en/ja)")
-@click.option("--provider", default="openai", help="LLM provider (openai/claude)")
-@click.option("--detail", default="normal", help="Detail level (brief/normal/detailed)")
-@click.option("--mode", default="multimodal", help="Mode (multimodal/audio)")
-@click.option("--remote", default="", help="Remote server URL (e.g. http://localhost:8000)")
-@click.option("--port", default=0, help="Local server port (0 = auto)")
-@click.option("--timeout", default=300, type=int, help="Timeout in seconds (default: 300)")
-def run(url, lang, provider, detail, mode, remote, port, timeout):
-    """Summarize a video URL. Emits JSON events to stdout."""
-    if remote:
-        _run_remote(url, lang, provider, detail, mode, remote, timeout)
+@click.option("--asr-provider", default="", help="Validate this ASR provider")
+@click.option(
+    "--asr-profile",
+    default=None,
+    type=click.Choice(["fast", "balanced", "accurate"]),
+)
+def doctor(asr_provider, asr_profile):
+    """Report required tools and configured provider capabilities."""
+    from core.config import settings
+
+    checks = []
+
+    def add(name: str, available: bool, required: bool, detail: str):
+        checks.append(
+            {
+                "name": name,
+                "available": available,
+                "required": required,
+                "detail": detail,
+            }
+        )
+
+    from core.runtime import ffmpeg_executable
+
+    ffmpeg = ffmpeg_executable()
+    yt_dlp = shutil.which("yt-dlp") or (
+        "python-package" if importlib.util.find_spec("yt_dlp") else None
+    )
+    add("ffmpeg", bool(ffmpeg), True, ffmpeg or "not found")
+    add("yt-dlp", bool(yt_dlp), True, yt_dlp or "not found")
+
+    library_dir = settings.library_dir.expanduser().resolve()
+    probe = library_dir
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    writable = probe.is_dir() and os.access(probe, os.W_OK)
+    add("library", writable, True, str(library_dir))
+
+    selected_model = None
+    if asr_profile:
+        from core.asr.profiles import resolve_asr_profile
+
+        _profile, selected_model = resolve_asr_profile(
+            asr_profile, settings.asr_model_dir
+        )
+        asr_provider = "whisper-cpp"
     else:
-        # Start embedded server
-        port = port or _free_port()
-        _start_server(port)
-        _run_remote(url, lang, provider, detail, mode, f"http://127.0.0.1:{port}", timeout)
+        asr_provider = asr_provider or settings.asr_provider
+    if asr_provider in ("whisper-cpp", "whisper_cpp"):
+        executable = shutil.which(settings.whisper_cpp_executable)
+        model_path = selected_model or settings.whisper_cpp_model.expanduser()
+        model_exists = model_path.is_file()
+        add(
+            "asr",
+            bool(executable and model_exists),
+            True,
+            (
+                f"whisper-cpp executable={executable or 'missing'}, "
+                f"model={model_path}"
+            ),
+        )
+    elif asr_provider == "openai":
+        add("asr", bool(settings.asr_api_key), True, "openai API configuration")
+    elif asr_provider == "local":
+        add(
+            "asr",
+            bool(settings.asr_endpoint),
+            True,
+            settings.asr_endpoint or "endpoint missing",
+        )
+    else:
+        add("asr", False, True, f"unknown provider: {asr_provider}")
+    add("host_ai", True, False, "transcript enhancement and note composition")
+
+    healthy = all(item["available"] for item in checks if item["required"])
+    emit("doctor", healthy=healthy, checks=checks)
+    if not healthy:
+        raise SystemExit(1)
 
 
-@click.command()
-@click.option("--port", default=8000, help="Server port")
-@click.option("--host", default="0.0.0.0", help="Server host")
-def serve(port, host):
-    """Start the web server (foreground)."""
-    import uvicorn
-    from core.main import app
+@click.group(name="library")
+def library_commands():
+    """Inspect resources saved in the local library."""
 
-    uvicorn.run(app, host=host, port=port)
+
+@click.group(name="resource")
+def resource_commands():
+    """Compose captured resources."""
+
+
+@click.group(name="frames")
+def frame_commands():
+    """Extract frames for host-AI visual analysis."""
+
+
+@click.group(name="cache")
+def cache_commands():
+    """Inspect and maintain the user-level content cache."""
+
+
+def _cache_store():
+    from core.cache import CacheStore
+    from core.config import settings
+
+    return CacheStore(settings.cache_dir)
+
+
+@cache_commands.command(name="dir")
+def cache_dir():
+    """Show the active cache directory."""
+    emit("cache_dir", path=str(_cache_store().root))
+
+
+@cache_commands.command(name="status")
+def cache_status():
+    """Show cache size and object counts."""
+    emit("cache_status", **_cache_store().status())
+
+
+@cache_commands.command(name="list")
+@click.option("--kind", default="")
+def cache_list(kind):
+    """List cached objects."""
+    entries = [entry.to_dict() for entry in _cache_store().list(kind)]
+    emit("cache_entries", count=len(entries), entries=entries)
+
+
+@cache_commands.command(name="inspect")
+@click.argument("key")
+def cache_inspect(key):
+    """Inspect one cached object by key."""
+    entry = _cache_store().get(key)
+    if not entry:
+        emit_error("Cache object not found", code=2, error_code="cache_miss")
+    emit("cache_entry", entry=entry.to_dict())
+
+
+@cache_commands.command(name="prune")
+@click.option("--max-gb", default=5.0, type=click.FloatRange(min=0.1))
+def cache_prune(max_gb):
+    """Remove expired and least-recently-used objects."""
+    result = _cache_store().prune(int(max_gb * 1024**3))
+    emit("cache_pruned", **result)
+
+
+@cache_commands.command(name="clear")
+@click.confirmation_option(prompt="Clear the video-sum cache?")
+def cache_clear():
+    """Delete every cached object."""
+    emit("cache_cleared", **_cache_store().clear())
+
+
+def _parse_timestamp(value: str) -> float:
+    parts = value.strip().split(":")
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError as exc:
+        raise click.BadParameter(f"invalid timestamp: {value}") from exc
+    if len(numbers) == 1:
+        return numbers[0]
+    if len(numbers) == 2:
+        return numbers[0] * 60 + numbers[1]
+    if len(numbers) == 3:
+        return numbers[0] * 3600 + numbers[1] * 60 + numbers[2]
+    raise click.BadParameter(f"invalid timestamp: {value}")
+
+
+@frame_commands.command(name="extract")
+@click.argument(
+    "video",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--at",
+    "timestamps",
+    multiple=True,
+    required=True,
+    help="Timestamp in seconds, MM:SS, or HH:MM:SS; repeat as needed",
+)
+@click.option(
+    "--around",
+    default=0.0,
+    type=click.FloatRange(min=0),
+    help="Also extract one frame this many seconds before and after each --at",
+)
+@click.option(
+    "--output-dir",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+)
+def extract_targeted_frames(video, timestamps, around, output_dir):
+    """Extract frames at explicit timestamps from a local video."""
+    from core.vision.frames import extract_frames_at
+
+    selected = []
+    for raw_timestamp in timestamps:
+        timestamp = _parse_timestamp(raw_timestamp)
+        selected.append(timestamp)
+        if around:
+            selected.extend([max(0, timestamp - around), timestamp + around])
+    selected = sorted(set(selected))
+    paths = extract_frames_at(video, output_dir, selected)
+    emit(
+        "frames_extracted",
+        video=str(video.resolve()),
+        frame_paths=[str(path.resolve()) for path in paths],
+        timestamps=selected,
+    )
+
+
+@resource_commands.command(name="compose")
+@click.argument("resource_id")
+@click.option(
+    "--content-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--summary-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--understanding-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--corrected-transcript-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--corrections-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option("--output-dir", default="", type=click.Path(file_okay=False))
+def resource_compose(
+    resource_id,
+    content_file,
+    summary_file,
+    understanding_file,
+    corrected_transcript_file,
+    corrections_file,
+    output_dir,
+):
+    """Compose a note from host-AI authored JSON content."""
+    import json
+
+    from core.config import settings
+    from core.library import FilesystemLibrary
+
+    root = Path(output_dir).expanduser() if output_dir else settings.library_dir
+    try:
+        if content_file:
+            content = json.loads(content_file.read_text(encoding="utf-8"))
+            if not isinstance(content, dict):
+                raise ValueError("content file must contain a JSON object")
+        else:
+            if not summary_file or not understanding_file:
+                raise ValueError(
+                    "provide --content-file or both --summary-file and "
+                    "--understanding-file"
+                )
+            content = {
+                "summary": summary_file.read_text(encoding="utf-8"),
+                "understanding": understanding_file.read_text(encoding="utf-8"),
+                "corrected_transcript": (
+                    corrected_transcript_file.read_text(encoding="utf-8")
+                    if corrected_transcript_file
+                    else ""
+                ),
+                "corrections": (
+                    json.loads(corrections_file.read_text(encoding="utf-8"))
+                    if corrections_file
+                    else []
+                ),
+            }
+        record = FilesystemLibrary(root).compose(
+            resource_id,
+            summary=str(content.get("summary") or ""),
+            understanding=str(content.get("understanding") or ""),
+            corrected_transcript=str(
+                content.get("corrected_transcript") or ""
+            ),
+            corrections=content.get("corrections") or [],
+        )
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        emit_error(str(exc), code=2, error_code="invalid_content")
+    emit("composed", **record.to_dict())
+
+
+@click.group(name="asr")
+def asr_commands():
+    """Inspect local transcription capabilities."""
+
+
+@asr_commands.command(name="profiles")
+def asr_profiles():
+    """List local model profiles and their installation state."""
+    from core.asr.profiles import ASR_PROFILES, resolve_asr_profile
+    from core.config import settings
+
+    profiles = []
+    for name, profile in ASR_PROFILES.items():
+        _profile, model_path = resolve_asr_profile(name, settings.asr_model_dir)
+        profiles.append(
+            {
+                "name": name,
+                "description": profile.description,
+                "model": profile.model_filename,
+                "path": str(model_path),
+                "installed": model_path.is_file(),
+            }
+        )
+    emit(
+        "asr_profiles",
+        model_dir=str(settings.asr_model_dir.expanduser().resolve()),
+        profiles=profiles,
+    )
+
+
+@library_commands.command(name="list")
+@click.option("--output-dir", default="", type=click.Path(file_okay=False))
+def library_list(output_dir):
+    """List saved resources."""
+    from core.config import settings
+    from core.library import FilesystemLibrary
+
+    root = Path(output_dir).expanduser() if output_dir else settings.library_dir
+    resources = FilesystemLibrary(root).list_resources()
+    emit("resources", count=len(resources), resources=resources)
+
+
+@library_commands.command(name="show")
+@click.argument("resource_id")
+@click.option("--output-dir", default="", type=click.Path(file_okay=False))
+def library_show(resource_id, output_dir):
+    """Show one saved resource manifest."""
+    from core.config import settings
+    from core.library import FilesystemLibrary
+
+    root = Path(output_dir).expanduser() if output_dir else settings.library_dir
+    try:
+        resource = FilesystemLibrary(root).get_resource(resource_id)
+    except FileNotFoundError as exc:
+        emit_error(str(exc), code=4, error_code="resource_not_found")
+    except ValueError as exc:
+        emit_error(str(exc), code=2, error_code="invalid_input")
+    emit("resource", resource=resource)
+
+
+@library_commands.command(name="search")
+@click.argument("query")
+@click.option("--output-dir", default="", type=click.Path(file_okay=False))
+def library_search(query, output_dir):
+    """Search title, URL, uploader, and tags."""
+    from core.config import settings
+    from core.library import FilesystemLibrary
+
+    root = Path(output_dir).expanduser() if output_dir else settings.library_dir
+    resources = FilesystemLibrary(root).search_resources(query)
+    emit("resources", query=query, count=len(resources), resources=resources)
 
 
 @click.command()
 @click.argument("url")
-@click.option("--lang", default="zh")
-@click.option("--provider", default="openai")
-@click.option("--detail", default="normal")
-@click.option("--mode", default="multimodal")
-@click.option("--remote", default="", help="Remote server URL")
-def submit(url, lang, provider, detail, mode, remote):
-    """Submit a video URL for summarization. Returns task_id."""
-    server = remote or "http://localhost:8000"
-    try:
-        resp = httpx.post(f"{server}/api/summarize", json={
-            "url": url, "language": lang, "llm_provider": provider,
-            "detail": detail, "mode": mode,
-        }, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        emit("submitted", task_id=data["task_id"], status=data["status"])
-    except httpx.HTTPStatusError as e:
-        emit_error(f"Server error: {e.response.status_code} {e.response.text}")
-    except httpx.ConnectError:
-        emit_error(f"Cannot connect to {server}. Is the server running?")
-
-
-@click.command()
-@click.argument("task_id")
-@click.option("--remote", default="", help="Remote server URL")
-def status(task_id, remote):
-    """Query task status."""
-    server = remote or "http://localhost:8000"
-    try:
-        resp = httpx.get(f"{server}/api/tasks/{task_id}/status", timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        emit("status", **data)
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            emit_error(f"Task not found: {task_id}")
-        else:
-            emit_error(f"Server error: {e.response.status_code}")
-    except httpx.ConnectError:
-        emit_error(f"Cannot connect to {server}")
-
-
-@click.command()
-@click.argument("task_id")
-@click.option("--remote", default="", help="Remote server URL")
-def result(task_id, remote):
-    """Get full task result."""
-    server = remote or "http://localhost:8000"
-    try:
-        resp = httpx.get(f"{server}/api/tasks/{task_id}", timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        emit("result", **data)
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            emit_error(f"Task not found: {task_id}")
-        else:
-            emit_error(f"Server error: {e.response.status_code}")
-    except httpx.ConnectError:
-        emit_error(f"Cannot connect to {server}")
-
-
-def _run_remote(url, lang, provider, detail, mode, server, timeout=300):
-    """Submit → poll → result with timeout."""
-    try:
-        # Submit
-        emit("submitting", url=url)
-        resp = httpx.post(f"{server}/api/summarize", json={
-            "url": url, "language": lang, "llm_provider": provider,
-            "detail": detail, "mode": mode,
-        }, timeout=30)
-        resp.raise_for_status()
-        task_id = resp.json()["task_id"]
-        emit("submitted", task_id=task_id)
-
-        # Poll with timeout
-        progress = _create_progress()
-        deadline = time.monotonic() + timeout
-
-        if progress:
-            with progress:
-                task = progress.add_task("Processing...", total=100)
-                while time.monotonic() < deadline:
-                    time.sleep(2)
-                    data = _poll_status(server, task_id)
-                    if data is None:
-                        continue
-                    progress.update(task, completed=data.get("progress", 0))
-                    emit("progress", status=data["status"], progress=data.get("progress", 0))
-
-                    if data["status"] == "done":
-                        _emit_result(server, task_id)
-                        return
-                    elif data["status"] == "failed":
-                        emit_error(f"Task failed: {data.get('error', 'unknown')}")
-        else:
-            while time.monotonic() < deadline:
-                time.sleep(2)
-                data = _poll_status(server, task_id)
-                if data is None:
-                    continue
-                emit("progress", status=data["status"], progress=data.get("progress", 0))
-
-                if data["status"] == "done":
-                    _emit_result(server, task_id)
-                    return
-                elif data["status"] == "failed":
-                    emit_error(f"Task failed: {data.get('error', 'unknown')}")
-
-        emit_error(f"Timed out after {timeout}s")
-
-    except httpx.ConnectError:
-        emit_error(f"Cannot connect to {server}")
-    except httpx.HTTPStatusError as e:
-        emit_error(f"Server error: {e.response.status_code}")
-
-
-def _poll_status(server, task_id):
-    """Poll task status. Returns data dict or None on transient error."""
-    try:
-        status_resp = httpx.get(f"{server}/api/tasks/{task_id}/status", timeout=10)
-        status_resp.raise_for_status()
-        return status_resp.json()
-    except (httpx.ConnectError, httpx.HTTPStatusError):
-        return None
-
-
-def _emit_result(server, task_id):
-    """Fetch and emit full task result."""
-    result_resp = httpx.get(f"{server}/api/tasks/{task_id}", timeout=10)
-    result_resp.raise_for_status()
-    full = result_resp.json()
-    emit("done", summary=full.get("summary", ""),
-         transcript=full.get("transcript", ""),
-         metadata=full.get("metadata", {}))
+@click.option("--output-dir", default="", type=click.Path(file_okay=False))
+@click.option("--lang", default="zh", type=click.Choice(["zh", "en", "ja"]))
+@click.option(
+    "--asr-provider",
+    default="",
+    help="ASR provider (configured default/whisper-cpp/local/openai)",
+)
+@click.option(
+    "--asr-profile",
+    default=None,
+    type=click.Choice(["fast", "balanced", "accurate"]),
+    help="Local whisper.cpp model profile",
+)
+@click.option("--frames", default=10, type=click.IntRange(0, 100))
+@click.option(
+    "--frame-mode",
+    default="hybrid",
+    type=click.Choice(["hybrid", "timestamp", "scene", "fps"]),
+)
+@click.option(
+    "--cache",
+    "cache_policy",
+    default="reuse",
+    type=click.Choice(["reuse", "refresh", "off"]),
+)
+@click.option("--force", is_flag=True)
+def capture(
+    url,
+    output_dir,
+    lang,
+    asr_provider,
+    asr_profile,
+    frames,
+    frame_mode,
+    cache_policy,
+    force,
+):
+    """Capture transcript and frames without invoking an internal LLM."""
+    _run_ingestion(
+        url,
+        lang,
+        asr_provider,
+        asr_profile or "",
+        output_dir,
+        frames,
+        force,
+        frame_mode=frame_mode,
+        cache_policy=cache_policy,
+    )

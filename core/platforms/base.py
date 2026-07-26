@@ -3,9 +3,10 @@ import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
 
 import yt_dlp
+
+from core.runtime import ffmpeg_executable
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +33,10 @@ class BasePlatform(ABC):
 
     @staticmethod
     def check_ffmpeg() -> None:
-        import shutil
-        if not shutil.which("ffmpeg"):
+        if not ffmpeg_executable():
             raise RuntimeError(
-                "ffmpeg not found. Install it: apt install ffmpeg / brew install ffmpeg, "
-                "or use Docker: docker compose up"
+                "ffmpeg not found. Install it with your OS package manager "
+                "(for example: brew install ffmpeg or apt install ffmpeg)"
             )
 
     @staticmethod
@@ -48,7 +48,7 @@ class BasePlatform(ABC):
         output_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [
-                "ffmpeg", "-y", "-i", str(video_path),
+                ffmpeg_executable(), "-y", "-i", str(video_path),
                 "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
                 str(output_path),
             ],

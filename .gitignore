@@ -6,4 +6,5 @@ data/
 .pytest_cache/
 dist/
 build/
+release/
 .venv/

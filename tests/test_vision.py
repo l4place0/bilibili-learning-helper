@@ -1,229 +1,8 @@
-"""Tests for multimodal pipeline — video path based summarization."""
+"""Tests for frame candidate extraction."""
+
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-
-import pytest
-
-
-# --- Multimodal LLM tests ---
-
-def test_base_llm_multimodal_fallback():
-    """BaseLLM.summarize_multimodal falls back to text-only."""
-    from core.llm.base import BaseLLM
-
-    class DummyLLM(BaseLLM):
-        def _chat(self, prompt, max_tokens=4096):
-            return f"text-only: {prompt[:20]}"
-
-    llm = DummyLLM()
-    with tempfile.TemporaryDirectory() as tmp:
-        video = Path(tmp) / "test.mp4"
-        video.write_bytes(b"fake video")
-        result = llm.summarize_multimodal("hello", video, lang="zh", detail="normal")
-    assert "text-only" in result
-
-
-def test_base_llm_classify():
-    """BaseLLM.classify parses JSON response."""
-    from core.llm.base import BaseLLM
-
-    class DummyLLM(BaseLLM):
-        def _chat(self, prompt, max_tokens=4096):
-            return '{"summary": "test video", "type": "tutorial"}'
-
-    llm = DummyLLM()
-    result = llm.classify("some transcript")
-    assert result["type"] == "tutorial"
-    assert result["summary"] == "test video"
-
-
-def test_base_llm_classify_invalid_json():
-    """BaseLLM.classify falls back to general on bad JSON."""
-    from core.llm.base import BaseLLM
-
-    class DummyLLM(BaseLLM):
-        def _chat(self, prompt, max_tokens=4096):
-            return "not json at all"
-
-    llm = DummyLLM()
-    result = llm.classify("some transcript")
-    assert result["type"] == "general"
-
-
-def test_base_llm_classify_markdown_json():
-    """BaseLLM.classify handles markdown-wrapped JSON."""
-    from core.llm.base import BaseLLM
-
-    class DummyLLM(BaseLLM):
-        def _chat(self, prompt, max_tokens=4096):
-            return '```json\n{"summary": "test", "type": "demo"}\n```'
-
-    llm = DummyLLM()
-    result = llm.classify("some transcript")
-    assert result["type"] == "demo"
-
-
-def test_claude_multimodal_extracts_frames():
-    """Claude multimodal extracts frames internally and sends as images."""
-    from core.llm.claude import ClaudeLLM
-
-    with tempfile.TemporaryDirectory() as tmp:
-        video = Path(tmp) / "test.mp4"
-        video.write_bytes(b"fake video")
-
-        with patch("core.llm.claude.settings") as mock_settings:
-            mock_settings.anthropic_api_key = "test-key"
-            mock_settings.anthropic_base_url = ""
-            mock_settings.claude_model = "test-model"
-            mock_settings.max_frames = 5
-            mock_settings.frame_interval = 30
-
-            llm = ClaudeLLM()
-
-            with patch.object(llm, "_chat_multimodal", return_value="multimodal summary") as mock_chat, \
-                 patch("core.llm.claude.extract_frames") as mock_extract:
-                frame = Path(tmp) / "frame.jpg"
-                frame.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
-                mock_extract.return_value = [frame]
-
-                result = llm.summarize_multimodal("transcript text", video, lang="zh", content_type="general")
-
-                assert result == "multimodal summary"
-                mock_extract.assert_called_once()
-                call_args = mock_chat.call_args
-                content = call_args[0][0]
-                assert len(content) == 2
-                assert content[0]["type"] == "image"
-                assert content[1]["type"] == "text"
-
-
-def test_openai_multimodal_frame_first():
-    """OpenAI multimodal tries frame extraction first."""
-    from core.llm.openai_proto import OpenAILLM
-
-    with tempfile.TemporaryDirectory() as tmp:
-        video = Path(tmp) / "test.mp4"
-        video.write_bytes(b"fake video")
-
-        with patch("core.llm.openai_proto.settings") as mock_settings:
-            mock_settings.openai_api_key = "test-key"
-            mock_settings.openai_base_url = "http://test"
-            mock_settings.openai_model = "test-model"
-            mock_settings.openai_vision_model = ""
-            mock_settings.max_frames = 5
-            mock_settings.frame_interval = 30
-
-            llm = OpenAILLM()
-
-            with patch.object(llm, "_chat_multimodal", return_value="frame summary") as mock_chat, \
-                 patch("core.llm.openai_proto.extract_frames") as mock_extract:
-                frame = Path(tmp) / "frame.jpg"
-                frame.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
-                mock_extract.return_value = [frame]
-
-                result = llm.summarize_multimodal("transcript text", video, lang="zh", content_type="general")
-
-                assert result == "frame summary"
-                mock_extract.assert_called_once()
-                call_args = mock_chat.call_args
-                content = call_args[0][0]
-                assert content[0]["type"] == "image_url"
-
-
-def test_openai_multimodal_fallback_to_native_video():
-    """OpenAI falls back to native video when frame extraction fails."""
-    from core.llm.openai_proto import OpenAILLM
-
-    with tempfile.TemporaryDirectory() as tmp:
-        video = Path(tmp) / "test.mp4"
-        video.write_bytes(b"fake video data")
-
-        with patch("core.llm.openai_proto.settings") as mock_settings:
-            mock_settings.openai_api_key = "test-key"
-            mock_settings.openai_base_url = "http://test"
-            mock_settings.openai_model = "test-model"
-            mock_settings.openai_vision_model = "mimo-v2-omni"
-            mock_settings.max_frames = 5
-            mock_settings.frame_interval = 30
-
-            llm = OpenAILLM()
-
-            with patch.object(llm, "_chat_multimodal", return_value="native video summary") as mock_chat, \
-                 patch("core.llm.openai_proto.extract_frames", return_value=[]):
-
-                result = llm.summarize_multimodal("transcript text", video, lang="zh", content_type="general")
-
-                assert result == "native video summary"
-                call_args = mock_chat.call_args
-                content = call_args[0][0]
-                assert content[0]["type"] == "video_url"
-
-
-def test_openai_multimodal_fallback_to_text():
-    """OpenAI falls back to text-only when both frame and native video fail."""
-    from core.llm.openai_proto import OpenAILLM
-
-    with tempfile.TemporaryDirectory() as tmp:
-        video = Path(tmp) / "test.mp4"
-        video.write_bytes(b"fake video data")
-
-        with patch("core.llm.openai_proto.settings") as mock_settings:
-            mock_settings.openai_api_key = "test-key"
-            mock_settings.openai_base_url = "http://test"
-            mock_settings.openai_model = "test-model"
-            mock_settings.openai_vision_model = "mimo-v2-omni"
-            mock_settings.max_frames = 5
-            mock_settings.frame_interval = 30
-
-            llm = OpenAILLM()
-
-            call_count = 0
-
-            def side_effect(*args, **kwargs):
-                nonlocal call_count
-                call_count += 1
-                if call_count == 1:
-                    raise RuntimeError("API error")
-                return "text fallback"
-
-            with patch.object(llm, "_chat", side_effect=side_effect), \
-                 patch.object(llm, "_chat_multimodal", side_effect=side_effect), \
-                 patch("core.llm.openai_proto.extract_frames") as mock_extract:
-                frame = Path(tmp) / "frame.jpg"
-                frame.write_bytes(b"fake")
-                mock_extract.return_value = [frame]
-
-                result = llm.summarize_multimodal("transcript", video, lang="zh", content_type="general")
-
-                assert result == "text fallback"
-
-
-def test_content_type_routing():
-    """content_type is passed through to prompt selection."""
-    from core.llm.prompts import get_summary_prompt
-
-    tutorial_prompt = get_summary_prompt("tutorial", "zh")
-    general_prompt = get_summary_prompt("general", "zh")
-
-    assert "步骤" in tutorial_prompt or "操作" in tutorial_prompt
-    assert tutorial_prompt != general_prompt
-    assert "{transcript}" in tutorial_prompt
-    assert "{transcript}" in general_prompt
-
-
-def test_content_types_coverage():
-    """All content types have prompts."""
-    from core.llm.prompts import CONTENT_TYPES, get_summary_prompt
-
-    for ct in CONTENT_TYPES:
-        prompt = get_summary_prompt(ct, "zh")
-        assert "{transcript}" in prompt
-        prompt_en = get_summary_prompt(ct, "en")
-        assert "{transcript}" in prompt_en
-
-
-# --- Frame extraction tests ---
+from unittest.mock import MagicMock, patch
 
 def test_assign_scenes_to_segments_basic():
     """Scene frames are assigned to correct segments with dedup."""
@@ -276,6 +55,25 @@ def test_assign_scenes_zero_duration():
 
     result = _assign_scenes_to_segments([(5.0, 0.8)], 0.0, 3, max_per_seg=2, min_gap=5.0, baseline_timestamps=[])
     assert result == []
+
+
+def test_detect_scene_changes_parses_ffmpeg_metadata(tmp_path):
+    from core.vision.frames import _detect_scene_changes
+
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    stdout = (
+        "frame:0 pts:100 pts_time:4.25\n"
+        "lavfi.scene_score=0.651257\n"
+        "frame:1 pts:200 pts_time:9.5\n"
+        "lavfi.scene_score=0.820679\n"
+    )
+    with patch("core.vision.frames.subprocess.run") as run:
+        run.return_value = MagicMock(stdout=stdout, stderr="")
+        scenes = _detect_scene_changes(video, 0.3)
+
+    assert scenes == [(4.25, 0.651257), (9.5, 0.820679)]
+    assert "metadata=print:file=-" in run.call_args.args[0][4]
 
 
 def test_extract_frames_hybrid_fallback_on_no_duration():
@@ -336,17 +134,77 @@ def test_extract_frames_webp_format():
             assert all(f.name.startswith("frame_") for f in result)
 
 
-def test_extract_frames_backward_compat():
-    """Explicit max_frames > 0 reverts to timestamp mode."""
+def test_extract_frames_hybrid_honors_explicit_limit():
+    """Explicit max_frames stays in hybrid mode and is passed as a cap."""
     from core.vision.frames import extract_frames
 
     with tempfile.TemporaryDirectory() as tmp:
         video = Path(tmp) / "test.mp4"
         video.write_bytes(b"fake video")
 
-        with patch("core.vision.frames._extract_frames_timestamp", return_value=[]) as mock_ts:
+        with patch(
+            "core.vision.frames._extract_frames_hybrid", return_value=[]
+        ) as mock_hybrid:
             extract_frames(video, max_frames=10, mode="hybrid")
-            mock_ts.assert_called_once()
+            assert mock_hybrid.call_args.kwargs["max_frames"] == 10
+
+
+def test_hybrid_fills_requested_count_when_no_scenes(tmp_path):
+    from core.vision.frames import _extract_frames_hybrid
+
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    output = tmp_path / "frames"
+    output.mkdir()
+    with (
+        patch("core.vision.frames._get_video_duration", return_value=100.0),
+        patch("core.vision.frames._detect_scene_changes", return_value=[]),
+        patch(
+            "core.vision.frames._encode_frame",
+            side_effect=lambda _v, _t, path, _w, _f, _q: path.touch() or True,
+        ),
+    ):
+        frames = _extract_frames_hybrid(
+            video, output, segments=60, max_frames=10
+        )
+
+    assert len(frames) == 10
+
+
+def test_hybrid_expands_scene_burst_without_crossing_next_cut(tmp_path):
+    from core.vision.frames import _extract_frames_hybrid
+
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    output = tmp_path / "frames"
+    output.mkdir()
+    timestamps = []
+
+    def encode(_video, timestamp, path, _width, _format, _quality):
+        timestamps.append(timestamp)
+        path.touch()
+        return True
+
+    with (
+        patch("core.vision.frames._get_video_duration", return_value=100.0),
+        patch(
+            "core.vision.frames._detect_scene_changes",
+            return_value=[(10.0, 0.9), (11.2, 0.8)],
+        ),
+        patch("core.vision.frames._encode_frame", side_effect=encode),
+    ):
+        _extract_frames_hybrid(
+            video,
+            output,
+            segments=1,
+            max_frames=4,
+            min_gap=1,
+            scene_offsets=(0.0, 0.5, 1.0, 2.0),
+        )
+
+    assert 10.0 in timestamps
+    assert 10.5 in timestamps
+    assert 11.0 in timestamps
 
 
 def test_encode_frame_webp_cmd():
@@ -358,7 +216,10 @@ def test_encode_frame_webp_cmd():
         video.write_bytes(b"fake")
         out_path = Path(tmp) / "frame.webp"
 
-        with patch("core.vision.frames.subprocess.run") as mock_run:
+        with (
+            patch("core.vision.frames.subprocess.run") as mock_run,
+            patch("core.vision.frames._supports_encoder", return_value=True),
+        ):
             mock_run.return_value = MagicMock(returncode=0)
             # Make out_path exist
             out_path.touch()
@@ -371,3 +232,92 @@ def test_encode_frame_webp_cmd():
             assert "-quality" in cmd
             assert "85" in cmd
             assert "scale=1280:-2" in cmd
+
+
+def test_encode_timestamps_runs_with_bounded_concurrency():
+    import threading
+    import time
+
+    from core.config import settings
+    from core.vision.frames import _encode_timestamps
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        video = root / "test.mp4"
+        video.write_bytes(b"fake")
+        thread_ids = set()
+        lock = threading.Lock()
+
+        def fake_encode(_video, _ts, output, _width, _fmt, _quality):
+            with lock:
+                thread_ids.add(threading.get_ident())
+            time.sleep(0.02)
+            output.touch()
+            return True
+
+        with (
+            patch.object(settings, "frame_workers", 3),
+            patch("core.vision.frames._encode_frame", side_effect=fake_encode),
+        ):
+            frames = _encode_timestamps(
+                video,
+                root,
+                [1.0, 2.0, 3.0, 4.0],
+                1280,
+                "webp",
+                85,
+            )
+
+        assert [frame.name for frame in frames] == [
+            "frame_0001.webp",
+            "frame_0002.webp",
+            "frame_0003.webp",
+            "frame_0004.webp",
+        ]
+        assert len(thread_ids) > 1
+
+
+def test_extract_frames_at_normalizes_timestamps(tmp_path):
+    from core.vision.frames import extract_frames_at
+
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    output = tmp_path / "frames"
+    with (
+        patch("core.vision.frames.BasePlatform.check_ffmpeg"),
+        patch(
+            "core.vision.frames._encode_timestamps",
+            return_value=[],
+        ) as mock_encode,
+        patch("core.vision.frames._supports_encoder", return_value=True),
+    ):
+        extract_frames_at(video, output, [10, -2, 10, 3])
+
+    assert mock_encode.call_args.args[2] == [0.0, 3.0, 10.0]
+
+
+def test_scene_mode_converts_jpeg_frames_with_cwebp(tmp_path):
+    from core.config import settings
+    from core.vision.frames import extract_frames
+
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    jpeg = tmp_path / "frame_0001.jpg"
+    with (
+        patch.object(settings, "frame_format", "webp"),
+        patch("core.vision.frames.BasePlatform.check_ffmpeg"),
+        patch("core.vision.frames._supports_encoder", return_value=False),
+        patch("core.vision.frames._supports_cwebp", return_value=True),
+        patch(
+            "core.vision.frames._extract_frames_scene",
+            return_value=[jpeg],
+        ),
+        patch(
+            "core.vision.frames._convert_images_to_webp",
+            return_value=[jpeg.with_suffix(".webp")],
+        ) as mock_convert,
+    ):
+        frames = extract_frames(video, output_dir=tmp_path, mode="scene")
+
+    mock_convert.assert_called_once_with([jpeg], settings.frame_quality)
+    assert frames == [jpeg.with_suffix(".webp")]

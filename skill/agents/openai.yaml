@@ -1,0 +1,4 @@
+interface:
+  display_name: "Video Learning Library"
+  short_description: "Turn video links into structured local learning notes"
+  default_prompt: "Use $bilibili-learning-helper to capture this video, enhance its transcript, and save a verified learning note."

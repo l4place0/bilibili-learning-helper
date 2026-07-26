@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --extra dev
       - name: Lint with ruff
         run: uv run ruff check .
 
@@ -38,11 +38,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Install Python dependencies
-        run: uv sync --dev
+        run: uv sync --extra dev
 
-      - name: Run unit tests
-        run: uv run pytest --tb=short -q -m "not e2e and not requires_server"
-
-      - name: Run integration tests
-        run: uv run pytest --tb=short -q -m "requires_server" --ignore=tests/test_review_doc_e2e.py --ignore=tests/test_retry_button.py
-        continue-on-error: true
+      - name: Run test suite
+        run: uv run pytest --tb=short -q

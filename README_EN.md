@@ -2,138 +2,122 @@
 
 English | [中文](README.md)
 
-A video summarization tool powered by Whisper ASR + LLM for Bilibili and YouTube.
+A Skill-driven, local-first video learning library. The CLI exposes
+deterministic primitives; the host AI interprets intent, improves terminology,
+selects frames, and writes summaries and Mermaid diagrams.
 
-## Features
+## Core workflow
 
-- **Video Summarization** — Automatically download, transcribe, classify, and summarize video content
-- **Batch Processing** — Submit multiple URLs at once, generate summaries in parallel
-- **Share Link Parsing** — Paste Bilibili share links (with title prefix) directly
-- **Multi-language** — Supports Chinese, English, and Japanese videos
-- **Multi-LLM** — Supports OpenAI and Claude
-- **Multimodal** — Optional frame analysis mode for richer visual-aware summaries
-- **Markdown Export** — One-click export to Obsidian-compatible YAML frontmatter format
-- **History Management** — Search, filter, favorite, retry, and delete tasks
-- **Prompt Customization** — Customize classification and summary prompts
-- **Web UI** — Modern dark-themed interface
+```text
+Video URL
+  -> video-sum capture
+  -> raw transcript + frame candidates
+  -> Host AI / Skill
+  -> video-sum resource compose
+  -> one Markdown note + sibling assets/
+```
 
-## Quick Start
+The core supports Bilibili and YouTube, Chinese/English/Japanese
+transcription, a user-level artifact cache, direct `whisper.cpp`, the OpenAI
+transcription API, and a generic local HTTP ASR endpoint.
 
-### Prerequisites
+## Skill installation
 
-- Python 3.10+
-- ffmpeg
-- yt-dlp
-
-### Installation
+Normal Skill use does not clone the repository, create a virtual environment,
+or install Python packages. The bootstrap uses the host's Python to select a
+pinned platform-specific GitHub Release; the installed CLI does not depend on
+the host Python:
 
 ```bash
-# Clone the repository
-git clone https://github.com/l4place/bilibili-learning-helper.git
+python skill/scripts/bootstrap.py status
+python skill/scripts/bootstrap.py install
+# After reviewing the version, URLs, checksum, and destination:
+python skill/scripts/bootstrap.py install --apply
+```
+
+Each bundle contains the Python runtime, Python dependencies, yt-dlp, the
+OpenAI ASR client, and FFmpeg. It excludes `whisper-cli` and Whisper models.
+The bootstrap verifies the release's SHA-256 sidecar and manifest before an
+atomic user-level installation.
+
+## Capture and compose
+
+```bash
+uv run video-sum doctor --asr-profile balanced
+uv run video-sum capture "https://www.bilibili.com/video/BVxxxxx/" \
+  --asr-profile balanced \
+  --frame-mode hybrid \
+  --cache reuse \
+  --frames 10
+```
+
+The Skill then asks the host AI to enhance the transcript and visual
+explanation before invoking `video-sum resource compose`. Each resource is one
+Markdown file with these level-one sections:
+
+```markdown
+# 总结稿
+# 辅助理解
+# Data
+```
+
+All images live in the sibling `assets/` directory.
+
+## Paths
+
+```dotenv
+VIDEO_SUM_LIBRARY_DIR=/absolute/path/to/video-notes
+VIDEO_SUM_CACHE_DIR=/absolute/path/to/cache
+VIDEO_SUM_MODEL_DIR=/absolute/path/to/whisper-models
+```
+
+Precedence is CLI argument > environment > `.env` > operating-system default.
+Models are never bundled with the project or Skill.
+
+## CLI primitives
+
+```bash
+video-sum doctor
+video-sum capture "<URL>"
+video-sum resource compose "<resource_id>" ...
+video-sum library list|show|search
+video-sum cache dir|status|list|inspect|prune|clear
+video-sum frames extract "<video-file>" --at 12:30 --around 2
+video-sum asr profiles
+```
+
+## Skill package
+
+```text
+skill/
+├── SKILL.md
+├── agents/openai.yaml
+├── references/environment-recovery.md
+└── scripts/bootstrap.py
+```
+
+`bootstrap.py status` returns the exact executable in `command`.
+`bootstrap.py install` produces a pinned download plan; adding `--apply`
+downloads, verifies, and installs it.
+
+## Development
+
+```bash
+git clone https://github.com/l4place0/bilibili-learning-helper.git
 cd bilibili-learning-helper
-
-# Install dependencies
-uv sync
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your API keys
+uv sync --extra dev
+uv run ruff check .
+uv run pytest
+uv sync --extra standalone
+uv run python scripts/build_standalone.py \
+  --target darwin-arm64 --version 0.1.0
 ```
 
-### Start
+Pushing a `v*` tag runs the five-platform release workflow and publishes each
+bundle with its `.sha256` sidecar.
 
-```bash
-uv run uvicorn core.main:app --port 8000
-```
-
-Open browser at `http://localhost:8000`
-
-### Skill Usage
-
-```bash
-# Single video
-bash skill/scripts/summarize.sh "https://bilibili.com/video/BVxxxxx"
-
-# Batch submit
-bash skill/scripts/summarize.sh "url1" "url2" "url3"
-
-# Check status
-bash skill/scripts/status.sh
-
-# Check for updates
-bash skill/scripts/check-update.sh
-```
-
-## Docker Deployment
-
-```bash
-docker compose up -d
-```
-
-## Architecture
-
-```
-User submits URL
-    │
-    ▼
-┌─────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
-│ Download │──▶│  Whisper  │──▶│ Classify │──▶│ Summarize│
-│ (yt-dlp) │   │  (ASR)   │   │  (LLM)   │   │  (LLM)   │
-└─────────┘   └──────────┘   └──────────┘   └──────────┘
-                  │                              │
-                  ▼                              ▼
-            Transcript                   Structured Summary
-```
-
-### Content Type Routing
-
-The system classifies videos into 7 types, then applies tailored prompts:
-
-| Type | Description | Output Structure |
-|------|-------------|------------------|
-| tutorial | How-to guides | Steps, prerequisites, pitfalls |
-| tech_talk | Tech speeches | Core argument, evidence, outlook |
-| demo | Product demos | Workflow, input/output, strengths |
-| review | Comparisons | Subjects, criteria, recommendations |
-| news | Current events | Facts, context, perspectives |
-| vlog | Daily content | Scenes, notable points |
-| general | Fallback | Core content, key points, analysis |
-
-## API
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/api/summarize` | POST | Submit video for summarization |
-| `/api/summarize/batch` | POST | Batch submit |
-| `/api/tasks` | GET | List tasks |
-| `/api/tasks/{id}` | GET | Task detail |
-| `/api/tasks/{id}/status` | GET | Lightweight status polling |
-| `/api/tasks/{id}/stream` | GET | SSE streaming output |
-| `/api/storage` | GET | Storage info |
-| `/api/storage` | DELETE | Cleanup data |
-
-## Configuration
-
-Environment variables (`.env`):
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OPENAI_API_KEY` | | OpenAI/MIMO API key |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API endpoint |
-| `OPENAI_MODEL` | `gpt-4o` | Text model |
-| `OPENAI_VISION_MODEL` | | Vision model for multimodal |
-| `ANTHROPIC_API_KEY` | | Claude API key |
-| `WHISPER_MODEL` | `base` | Whisper model size |
-| `MAX_FRAMES` | `10` | Max frames for multimodal |
-
-## Tech Stack
-
-- Python 3.10+, FastAPI, uv
-- Whisper (ASR), yt-dlp (download), ffmpeg (audio/video processing)
-- Claude / OpenAI-compatible LLMs
-- SQLite (WAL mode)
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module boundaries.
 
 ## License
 
-MIT License
+MIT

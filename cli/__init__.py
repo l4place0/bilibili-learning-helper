@@ -10,10 +10,20 @@ def main():
     pass
 
 
-from cli.commands import run, serve, submit, status, result  # noqa: E402
+from cli.commands import (  # noqa: E402
+    asr_commands,
+    capture,
+    cache_commands,
+    doctor,
+    frame_commands,
+    library_commands,
+    resource_commands,
+)
 
-main.add_command(run)
-main.add_command(serve)
-main.add_command(submit)
-main.add_command(status)
-main.add_command(result)
+main.add_command(asr_commands)
+main.add_command(capture)
+main.add_command(cache_commands)
+main.add_command(doctor)
+main.add_command(frame_commands)
+main.add_command(library_commands)
+main.add_command(resource_commands)

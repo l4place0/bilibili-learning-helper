@@ -1,25 +1,19 @@
-"""Platform adapters for video download and URL construction."""
+"""Platform adapters for video capture."""
+
+from core.platforms.base import BasePlatform
+from core.platforms.bilibili import BilibiliPlatform
+from core.platforms.youtube import YouTubePlatform
 
 
-def build_video_url(platform: str, video_id: str, time_seconds: int = 0) -> str | None:
-    """Build an external video URL with optional timestamp.
+PLATFORMS: list[BasePlatform] = [
+    BilibiliPlatform(),
+    YouTubePlatform(),
+]
 
-    Args:
-        platform: Platform name (youtube, bilibili, etc.)
-        video_id: Video identifier
-        time_seconds: Timestamp in seconds
 
-    Returns:
-        URL string, or None if platform is unknown.
-    """
-    if platform == "youtube":
-        url = f"https://youtube.com/watch?v={video_id}"
-        if time_seconds > 0:
-            url += f"&t={time_seconds}"
-        return url
-    elif platform == "bilibili":
-        url = f"https://bilibili.com/video/{video_id}"
-        if time_seconds > 0:
-            url += f"?t={time_seconds}"
-        return url
-    return None
+def get_platform(url: str) -> BasePlatform:
+    """Resolve a supported video platform without importing task infrastructure."""
+    for platform in PLATFORMS:
+        if platform.match(url):
+            return platform
+    raise ValueError(f"Unsupported URL: no platform matched for {url}")

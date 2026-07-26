@@ -1,92 +1,72 @@
 from pathlib import Path
+
+from platformdirs import user_cache_path, user_data_path
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Server
-    host: str = "127.0.0.1"
-    port: int = 8000
-    api_secret: str = ""
-
-    # LLM
-    llm_provider: str = "openai"
-    claude_model: str = "claude-sonnet-4-20250514"
-    anthropic_api_key: str = ""
-    anthropic_base_url: str = ""
-    openai_model: str = "gpt-4o"
-    openai_vision_model: str = ""  # vision-capable model for multimodal; empty = use openai_model
-    openai_api_key: str = ""
-    openai_base_url: str = "https://api.openai.com/v1"
-
-    # Whisper
-    whisper_model: str = "medium"
-    whisper_backend: str = "faster"  # "faster" or "openai"
-    hf_endpoint: str = ""  # HuggingFace mirror endpoint, e.g. https://hf-mirror.com
-
-    # ASR service
-    asr_provider: str = "inprocess"  # inprocess | local | openai
+    # ASR
+    asr_provider: str = "whisper-cpp"  # whisper-cpp | local | openai
     asr_endpoint: str = ""           # http://gpu-server:8001 (for local)
     asr_api_key: str = ""            # API key (for openai cloud)
     asr_model: str = "whisper-1"     # cloud model name
+    asr_timeout_seconds: int = 3600
+    asr_model_dir: Path = Field(
+        default_factory=lambda: user_data_path("video-sum") / "models",
+        validation_alias=AliasChoices("VIDEO_SUM_MODEL_DIR", "ASR_MODEL_DIR"),
+    )
+    whisper_cpp_executable: str = "whisper-cli"
+    whisper_cpp_model: Path = (
+        user_data_path("video-sum") / "models" / "ggml-small-q5_1.bin"
+    )
 
     # Cookies (for Bilibili etc.)
-    cookies_path: Path = Path("data/cookies.txt")
+    cookies_path: Path = user_data_path("video-sum") / "cookies.txt"
 
     # Vision / frame extraction
-    frame_mode: str = "interval"
-    max_frames: int = 10
-    frame_interval: int = 30
     scene_threshold: float = 0.3
+    scene_offsets: str = "0,0.5,1,2"
     frame_format: str = "webp"
     frame_quality: int = 85
     frame_width: int = 1280
+    frame_workers: int = 4
     min_gap: float = 5.0
     max_scene_per_seg: int = 2
     segments: int = 60
 
-    # GitHub Pages publish
-    github_repo: str = ""              # "user/video-reviews"
-    github_token: str = ""             # PAT with repo scope
-    github_branch: str = "gh-pages"
-    github_pages_url: str = ""         # "https://user.github.io/video-reviews"
-
     # Storage
-    data_dir: Path = Path("data")
-    auto_cleanup_days: int = 7
+    cache_root: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VIDEO_SUM_CACHE_DIR", "CACHE_ROOT"),
+    )
+    library_dir: Path = Field(
+        default=Path("library"),
+        validation_alias=AliasChoices("VIDEO_SUM_LIBRARY_DIR", "LIBRARY_DIR"),
+    )
 
-    @property
-    def db_path(self) -> Path:
-        return self.data_dir / "db.sqlite3"
+    @field_validator(
+        "asr_model_dir",
+        "whisper_cpp_model",
+        "cookies_path",
+        "cache_root",
+        "library_dir",
+    )
+    @classmethod
+    def expand_user_path(cls, value: Path | None) -> Path | None:
+        return value.expanduser() if value is not None else None
 
     @property
     def cache_dir(self) -> Path:
-        return self.data_dir / "cache"
+        if self.cache_root is not None:
+            return self.cache_root.expanduser()
+        return user_cache_path("video-sum")
 
-    @property
-    def audio_dir(self) -> Path:
-        return self.cache_dir / "audio"
-
-    @property
-    def transcript_dir(self) -> Path:
-        return self.cache_dir / "transcripts"
-
-    @property
-    def frames_dir(self) -> Path:
-        return self.cache_dir / "frames"
-
-    @property
-    def log_dir(self) -> Path:
-        return self.data_dir / "logs"
-
-    @property
-    def github_repo_dir(self) -> Path:
-        return self.data_dir / "github-repo"
-
-    def ensure_dirs(self) -> None:
-        for d in [self.data_dir, self.cache_dir, self.audio_dir, self.transcript_dir, self.frames_dir, self.log_dir]:
-            d.mkdir(parents=True, exist_ok=True)
-
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "populate_by_name": True,
+    }
 
 
 settings = Settings()

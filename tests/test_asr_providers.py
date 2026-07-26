@@ -1,21 +1,48 @@
 """Tests for ASR providers."""
 
-import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.asr.base import BaseASR
+
 
 def test_base_asr_interface():
-    from core.asr.base import BaseASR
     assert hasattr(BaseASR, "transcribe")
 
 
-def test_inprocess_asr_duck_typing():
-    from core.asr.whisper import InProcessASR
-    asr = InProcessASR()
-    assert hasattr(asr, "transcribe")
+def test_whisper_cpp_parses_json_offsets():
+    from core.asr.whisper_cpp import WhisperCppASR
+
+    segments = WhisperCppASR._parse_segments(
+        {
+            "transcription": [
+                {
+                    "timestamps": {"from": "00:00:00,000", "to": "00:00:02,500"},
+                    "offsets": {"from": 0, "to": 2500},
+                    "text": " 第一段 ",
+                },
+                {
+                    "timestamps": {"from": "00:00:02,500", "to": "00:01:03,000"},
+                    "offsets": {"from": 2500, "to": 63000},
+                    "text": "第二段",
+                },
+            ]
+        }
+    )
+
+    assert segments == [
+        {"start": 0.0, "end": 2.5, "text": "第一段"},
+        {"start": 2.5, "end": 63.0, "text": "第二段"},
+    ]
+
+
+def test_whisper_cpp_progress_parser_uses_latest_value():
+    from core.asr.whisper_cpp import parse_progress
+
+    assert parse_progress("progress = 12%\rprogress = 47%") == 47
+    assert parse_progress("progress = 108%") == 100
+    assert parse_progress("loading model") is None
 
 
 @patch("core.asr.local.httpx")
@@ -59,13 +86,6 @@ def test_openai_whisper_api_calls_openai(mock_openai_cls, tmp_path):
 
     assert result == "Hello world from cloud"
     mock_client.audio.transcriptions.create.assert_called_once()
-
-
-def test_get_asr_inprocess():
-    from core.asr import get_asr
-    from core.asr.whisper import InProcessASR
-    asr = get_asr("inprocess")
-    assert isinstance(asr, InProcessASR)
 
 
 def test_get_asr_local_requires_endpoint():
