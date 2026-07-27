@@ -135,6 +135,7 @@ def test_capture_uses_configured_defaults():
     assert run_ingestion.call_args.kwargs == {
         "frame_mode": "scene",
         "cache_policy": "off",
+        "fact_check_mode": "auto",
     }
 
 

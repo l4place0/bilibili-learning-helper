@@ -126,6 +126,7 @@ video-sum capture \
   --asr-profile balanced \
   --frame-mode hybrid \
   --cache reuse \
+  --fact-check auto \
   --frames 10
 ```
 
@@ -139,7 +140,8 @@ video-sum resource compose "<resource_id>" \
   --summary-file summary.md \
   --understanding-file understanding.md \
   --corrected-transcript-file corrected-transcript.md \
-  --corrections-file corrections.json
+  --corrections-file corrections.json \
+  --fact-check-file fact-check.json
 ```
 
 每条资源只产生一份 Markdown 笔记，一级标题固定为：
@@ -152,6 +154,12 @@ video-sum resource compose "<resource_id>" \
 
 图片统一放在笔记同目录的 `assets/` 中，不创建视频专属目录。`# Data`
 保存原始/增强转写稿、术语修正信息与关键帧索引。
+
+外部事实核验由宿主 AI 按 `off`、`auto`、`important`、`all` 或 `required`
+模式执行，仅处理带时间戳的客观或时效性声明，不核验观点和个人体验。核验
+结果优先引用可点击的一手来源；无法安全核验时会用固定原因代码显式标为
+跳过，普通模式仍可继续生成笔记，`required` 模式则阻止合成。笔记会明确
+区分“核验完成但无声明”和“未核验”，且不会把搜索摘要当成来源。
 
 ## CLI 原语
 
@@ -179,6 +187,8 @@ VIDEO_SUM_DEFAULT_LANGUAGE=zh
 VIDEO_SUM_DEFAULT_FRAMES=10
 VIDEO_SUM_DEFAULT_FRAME_MODE=hybrid
 VIDEO_SUM_DEFAULT_CACHE_POLICY=reuse
+VIDEO_SUM_FACT_CHECK=auto
+VIDEO_SUM_FACT_CHECK_SOURCE_POLICY=primary-first
 ```
 
 路径和默认项优先级为：CLI 参数 > 环境变量 > 项目 `.env` > 用户

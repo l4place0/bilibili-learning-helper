@@ -34,6 +34,8 @@ def onboard_args(tmp_path, **overrides):
         "frames": 10,
         "frame_mode": "hybrid",
         "cache_policy": "reuse",
+        "fact_check": "auto",
+        "fact_check_source_policy": "primary-first",
         "update": False,
         "apply": False,
     }

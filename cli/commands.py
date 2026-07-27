@@ -24,6 +24,7 @@ def _run_ingestion(
     force: bool,
     frame_mode: str = "timestamp",
     cache_policy: str = "reuse",
+    fact_check_mode: str = "auto",
 ):
     """Run the framework-independent ingestion service and emit NDJSON."""
     from core.asr.profiles import resolve_asr_profile
@@ -57,6 +58,7 @@ def _run_ingestion(
         asr_provider=asr_provider or "configured-default",
         asr_profile=asr_profile or "configured-default",
         asr_model=str(asr_model_path) if asr_model_path else "configured-default",
+        fact_check_mode=fact_check_mode,
     )
     try:
         record = IngestionService().ingest(
@@ -70,6 +72,7 @@ def _run_ingestion(
                 frame_count=frames,
                 frame_mode=frame_mode,
                 cache_policy=cache_policy,
+                fact_check_mode=fact_check_mode,
                 force=force,
             ),
             progress=on_progress,
@@ -318,6 +321,16 @@ def extract_targeted_frames(video, timestamps, around, output_dir):
     "--corrections-file",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
+@click.option(
+    "--fact-check-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--fact-check",
+    "fact_check_mode",
+    default=None,
+    type=click.Choice(["off", "auto", "important", "all", "required"]),
+)
 @click.option("--output-dir", default="", type=click.Path(file_okay=False))
 def resource_compose(
     resource_id,
@@ -326,6 +339,8 @@ def resource_compose(
     understanding_file,
     corrected_transcript_file,
     corrections_file,
+    fact_check_file,
+    fact_check_mode,
     output_dir,
 ):
     """Compose a note from host-AI authored JSON content."""
@@ -360,6 +375,10 @@ def resource_compose(
                     else []
                 ),
             }
+        if fact_check_file:
+            content["fact_check"] = json.loads(
+                fact_check_file.read_text(encoding="utf-8")
+            )
         record = FilesystemLibrary(root).compose(
             resource_id,
             summary=str(content.get("summary") or ""),
@@ -368,6 +387,8 @@ def resource_compose(
                 content.get("corrected_transcript") or ""
             ),
             corrections=content.get("corrections") or [],
+            fact_check=content.get("fact_check"),
+            fact_check_mode=fact_check_mode,
         )
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
         emit_error(str(exc), code=2, error_code="invalid_content")
@@ -474,6 +495,12 @@ def library_search(query, output_dir):
     default=None,
     type=click.Choice(["reuse", "refresh", "off"]),
 )
+@click.option(
+    "--fact-check",
+    "fact_check_mode",
+    default=None,
+    type=click.Choice(["off", "auto", "important", "all", "required"]),
+)
 @click.option("--force", is_flag=True)
 def capture(
     url,
@@ -484,6 +511,7 @@ def capture(
     frames,
     frame_mode,
     cache_policy,
+    fact_check_mode,
     force,
 ):
     """Capture transcript and frames without invoking an internal LLM."""
@@ -508,4 +536,5 @@ def capture(
         force,
         frame_mode=frame_mode or settings.default_frame_mode,
         cache_policy=cache_policy or settings.default_cache_policy,
+        fact_check_mode=fact_check_mode or settings.fact_check,
     )

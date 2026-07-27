@@ -42,6 +42,7 @@ class IngestionRequest:
     frame_count: int = 10
     frame_mode: str = "hybrid"
     cache_policy: str = "off"
+    fact_check_mode: str = "auto"
     force: bool = False
 
 
@@ -279,6 +280,7 @@ class IngestionService:
                         frames_cache_key if request.frame_count > 0 else ""
                     ),
                 },
+                fact_check_mode=request.fact_check_mode,
                 force=request.force,
             )
             report("done", 100, "Resource saved")

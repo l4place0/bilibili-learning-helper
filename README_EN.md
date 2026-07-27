@@ -70,6 +70,7 @@ uv run video-sum capture "https://www.bilibili.com/video/BVxxxxx/" \
   --asr-profile balanced \
   --frame-mode hybrid \
   --cache reuse \
+  --fact-check auto \
   --frames 10
 ```
 
@@ -85,6 +86,14 @@ Markdown file with these level-one sections:
 
 All images live in the sibling `assets/` directory.
 
+External fact-checking supports `off`, `auto`, `important`, `all`, and
+`required`. The host AI checks only timestamped objective or time-sensitive
+claims, prefers clickable primary sources, and never treats search snippets as
+evidence. If safe verification is unavailable, the note records a fixed skip
+reason and clearly labels the relevant text as an unverified video statement.
+Skipping remains non-blocking except in `required` mode. Pass structured results
+to `resource compose` with `--fact-check-file fact-check.json`.
+
 ## Paths
 
 ```dotenv
@@ -95,6 +104,8 @@ VIDEO_SUM_DEFAULT_LANGUAGE=zh
 VIDEO_SUM_DEFAULT_FRAMES=10
 VIDEO_SUM_DEFAULT_FRAME_MODE=hybrid
 VIDEO_SUM_DEFAULT_CACHE_POLICY=reuse
+VIDEO_SUM_FACT_CHECK=auto
+VIDEO_SUM_FACT_CHECK_SOURCE_POLICY=primary-first
 ```
 
 Precedence is CLI argument > environment > project `.env` > user
