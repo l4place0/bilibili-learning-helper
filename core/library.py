@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import tempfile
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,26 @@ def safe_filename(value: str, fallback: str = "video-note", max_length: int = 12
 
 def _yaml_string(value: Any) -> str:
     return json.dumps("" if value is None else str(value), ensure_ascii=False)
+
+
+def _stage_text_in_target_directory(target: Path, content: str) -> Path:
+    """Write replacement content beside its target so platform ACLs inherit."""
+    for _attempt in range(10):
+        staged = target.parent / f".video-sum-{uuid.uuid4().hex}.tmp"
+        try:
+            with staged.open("x", encoding="utf-8", newline="\n") as output:
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+            return staged
+        except FileExistsError:
+            continue
+        except BaseException:
+            staged.unlink(missing_ok=True)
+            raise
+    raise RuntimeError(
+        f"Could not allocate a temporary file beside target: {target}"
+    )
 
 
 @dataclass(frozen=True)
@@ -200,33 +221,28 @@ class FilesystemLibrary:
             fact_check=normalized_fact_check,
         )
 
-        staging_parent = self.root / ".video-sum-staging"
-        staging_parent.mkdir(parents=True, exist_ok=True)
-        stage_dir = Path(
-            tempfile.mkdtemp(prefix=f"{resource_id}-compose-", dir=staging_parent)
-        )
+        staged_note: Path | None = None
+        staged_manifest: Path | None = None
         try:
-            staged_note = stage_dir / note_path.name
-            staged_note.write_text(note_text, encoding="utf-8")
             manifest["schema_version"] = self.schema_version
             manifest["providers"] = dict(manifest.get("providers") or {})
             manifest["providers"]["llm"] = "host"
             manifest["corrections"] = corrections or []
             manifest["fact_check"] = normalized_fact_check
             manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
-            staged_manifest = stage_dir / "resource.json"
-            staged_manifest.write_text(
+            staged_note = _stage_text_in_target_directory(note_path, note_text)
+            staged_manifest = _stage_text_in_target_directory(
+                manifest_path,
                 json.dumps(manifest, ensure_ascii=False, indent=2),
-                encoding="utf-8",
             )
             os.replace(staged_manifest, manifest_path)
+            staged_manifest = None
             os.replace(staged_note, note_path)
+            staged_note = None
         finally:
-            shutil.rmtree(stage_dir, ignore_errors=True)
-            try:
-                staging_parent.rmdir()
-            except OSError:
-                pass
+            for staged in (staged_manifest, staged_note):
+                if staged is not None:
+                    staged.unlink(missing_ok=True)
 
         return ResourceRecord(
             resource_id=resource_id,

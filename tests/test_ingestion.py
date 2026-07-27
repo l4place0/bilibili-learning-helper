@@ -1,6 +1,8 @@
 """Tests for direct CLI ingestion and filesystem resource notes."""
 
 import json
+import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
@@ -167,7 +169,9 @@ def test_ingestion_reuses_content_addressed_cache(tmp_path):
     assert download_count == 1
     assert asr_count == 1
     assert frame_count == 1
-    manifest = json.loads(second.manifest_path.read_text())
+    manifest = json.loads(
+        second.manifest_path.read_text(encoding="utf-8")
+    )
     assert manifest["cache_keys"]["transcript"]
     assert first.resource_id == second.resource_id
 
@@ -481,3 +485,76 @@ def test_cli_compose_fact_check_file_overrides_content_payload(tmp_path):
     assert result.exit_code == 0
     note = captured.note_path.read_text(encoding="utf-8")
     assert "外部事实核验已完成" in note
+
+
+def test_compose_stages_replacements_beside_each_target(tmp_path):
+    library = FilesystemLibrary(tmp_path / "library")
+    captured = library.save(
+        platform="bilibili",
+        video_id="BV1acl",
+        source_url="https://example.test/video",
+        metadata={"title": "Windows ACL 样本"},
+        summary="",
+        understanding="",
+        transcript="[00:00] 原始转写",
+        transcript_segments=[],
+        frames=[],
+        providers={"asr": "test", "llm": "host"},
+    )
+    real_replace = os.replace
+    replacements = []
+
+    def recording_replace(source, target):
+        replacements.append((source, target))
+        real_replace(source, target)
+
+    with patch("core.library.os.replace", side_effect=recording_replace):
+        library.compose(
+            captured.resource_id,
+            summary="总结",
+            understanding=(
+                '```mermaid\nflowchart TD\n  A["输入"] --> B["总结"]\n```'
+            ),
+        )
+
+    assert len(replacements) == 2
+    for source, target in replacements:
+        assert Path(source).parent == Path(target).parent
+        assert Path(source).name.startswith(".video-sum-")
+    assert not (tmp_path / "library" / ".video-sum-staging").exists()
+
+
+def test_compose_cleans_adjacent_temporary_files_after_replace_error(tmp_path):
+    library_root = tmp_path / "library"
+    library = FilesystemLibrary(library_root)
+    captured = library.save(
+        platform="bilibili",
+        video_id="BV1acl-failure",
+        source_url="https://example.test/video",
+        metadata={"title": "Windows ACL 失败恢复"},
+        summary="",
+        understanding="",
+        transcript="[00:00] 原始转写",
+        transcript_segments=[],
+        frames=[],
+        providers={"asr": "test", "llm": "host"},
+    )
+
+    with patch("core.library.os.replace", side_effect=OSError("replace failed")):
+        try:
+            library.compose(
+                captured.resource_id,
+                summary="总结",
+                understanding=(
+                    '```mermaid\n'
+                    'flowchart TD\n  A["输入"] --> B["总结"]\n'
+                    "```"
+                ),
+            )
+        except OSError as exc:
+            assert str(exc) == "replace failed"
+        else:
+            raise AssertionError("compose must surface replacement errors")
+
+    assert not list(library_root.glob(".video-sum-*.tmp"))
+    assert not list((library_root / "assets").glob(".video-sum-*.tmp"))
