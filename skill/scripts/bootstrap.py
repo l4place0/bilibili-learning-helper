@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
@@ -100,6 +101,259 @@ def doctor_checks(video_sum: str) -> dict:
     }
 
 
+GPU_BACKENDS = {
+    "metal": ("metal",),
+    "cuda": ("cuda", "cublas"),
+    "vulkan": ("vulkan",),
+    "rocm": ("rocm", "hipblas"),
+    "sycl": ("sycl",),
+    "opencl": ("opencl",),
+}
+
+
+def gpu_hardware_probe() -> dict:
+    """Find GPU candidates without requiring whisper.cpp or FFmpeg."""
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    candidates: list[dict[str, str]] = []
+
+    if system == "darwin":
+        profiler = shutil.which("system_profiler")
+        if not profiler and Path("/usr/sbin/system_profiler").is_file():
+            profiler = "/usr/sbin/system_profiler"
+        if profiler:
+            try:
+                result = run([profiler, "SPDisplaysDataType", "-json"])
+                displays = json.loads(result.stdout).get(
+                    "SPDisplaysDataType",
+                    [],
+                )
+                for display in displays:
+                    if display.get("spdisplays_mtlgpufamilysupport"):
+                        candidates.append(
+                            {
+                                "backend": "metal",
+                                "device": (
+                                    display.get("sppci_model")
+                                    or display.get("_name")
+                                    or "Metal-capable GPU"
+                                ),
+                            }
+                        )
+            except (
+                json.JSONDecodeError,
+                OSError,
+                subprocess.SubprocessError,
+            ):
+                pass
+        if not candidates and machine in {"arm64", "aarch64"}:
+            candidates.append(
+                {"backend": "metal", "device": "Apple Silicon GPU"}
+            )
+
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        try:
+            result = run(
+                [
+                    nvidia_smi,
+                    "--query-gpu=name",
+                    "--format=csv,noheader",
+                ]
+            )
+            if result.returncode == 0:
+                candidates.extend(
+                    {"backend": "cuda", "device": line.strip()}
+                    for line in result.stdout.splitlines()
+                    if line.strip()
+                )
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    if system == "linux" and Path("/dev/kfd").exists():
+        candidates.append({"backend": "rocm", "device": "/dev/kfd"})
+
+    unique = []
+    seen = set()
+    for candidate in candidates:
+        key = (candidate["backend"], candidate["device"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return {
+        "status": "candidate_detected" if unique else "not_detected",
+        "candidate": bool(unique),
+        "devices": unique,
+        "evidence_level": "hardware_only",
+    }
+
+
+def whisper_gpu_probe(executable: str, hardware: dict | None = None) -> dict:
+    """Inspect whisper.cpp startup output without loading a model."""
+    hardware = hardware or {"candidate": False, "devices": []}
+    if not executable:
+        candidate = bool(hardware.get("candidate"))
+        return {
+            "status": "runtime_missing",
+            "gpu_capable": False,
+            "backend": "",
+            "evidence": (
+                ["GPU hardware candidate detected, but whisper-cli is missing"]
+                if candidate
+                else ["whisper-cli not found"]
+            ),
+            "recommendation": (
+                "offer_gpu_whisper_setup"
+                if candidate
+                else "keep_configured_asr_provider"
+            ),
+        }
+
+    try:
+        result = run([executable, "--help"])
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "status": "unverified",
+            "gpu_capable": False,
+            "backend": "",
+            "evidence": [f"probe failed: {type(exc).__name__}"],
+            "recommendation": "keep_configured_asr_provider",
+        }
+
+    output = "\n".join((result.stdout, result.stderr)).lower()
+    backend_lines = [
+        line.strip()
+        for line in output.splitlines()
+        if "backend" in line and ("load" in line or "device" in line)
+    ]
+    detected = ""
+    for name, markers in GPU_BACKENDS.items():
+        if any(
+            any(marker in line for marker in markers)
+            for line in backend_lines
+        ):
+            detected = name
+            break
+
+    exposes_gpu_controls = bool(
+        re.search(r"(?:--no-gpu|--device(?:\s|$))", output)
+    )
+    evidence = backend_lines[:4]
+    if not evidence:
+        evidence.append("no loaded GPU backend reported by whisper-cli --help")
+    if detected:
+        return {
+            "status": "available",
+            "gpu_capable": True,
+            "backend": detected,
+            "gpu_enabled_by_default": exposes_gpu_controls,
+            "evidence": evidence,
+            "recommendation": "prefer_whisper_cpp_gpu",
+        }
+    if hardware.get("candidate"):
+        return {
+            "status": "runtime_gpu_unverified",
+            "gpu_capable": False,
+            "backend": "",
+            "gpu_enabled_by_default": exposes_gpu_controls,
+            "evidence": evidence,
+            "recommendation": "offer_gpu_whisper_runtime",
+        }
+    return {
+        "status": "unverified" if exposes_gpu_controls else "unavailable",
+        "gpu_capable": False,
+        "backend": "",
+        "gpu_enabled_by_default": exposes_gpu_controls,
+        "evidence": evidence,
+        "recommendation": "keep_configured_asr_provider",
+    }
+
+
+def ffmpeg_gpu_probe(executable: str) -> dict:
+    """Report FFmpeg hardware methods while preserving the CPU-only contract."""
+    accelerators: list[str] = []
+    if executable:
+        try:
+            result = run([executable, "-hide_banner", "-hwaccels"])
+            if result.returncode == 0:
+                accelerators = [
+                    line.strip()
+                    for line in result.stdout.splitlines()
+                    if line.strip()
+                    and not line.lower().startswith("hardware acceleration")
+                ]
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return {
+        "status": "unsupported",
+        "gpu_capable": False,
+        "probe_executable": executable,
+        "ffmpeg_hwaccels": accelerators,
+        "evidence": (
+            ["FFmpeg exposes: " + ", ".join(accelerators)]
+            if accelerators
+            else ["FFmpeg reported no hardware acceleration methods"]
+        ),
+        "reason": (
+            "video-sum frame extraction does not currently enable FFmpeg "
+            "hardware decode or GPU filters"
+        ),
+        "recommendation": "use_cpu_frame_extraction",
+    }
+
+
+def acceleration_guidance(
+    hardware: dict,
+    whisper: dict,
+    frames: dict,
+) -> list[str]:
+    guidance = []
+    if whisper.get("recommendation") == "prefer_whisper_cpp_gpu":
+        guidance.append(
+            "When the user did not select another ASR provider, run doctor "
+            "for a local profile and prefer --asr-profile balanced when it "
+            "is healthy; whisper.cpp enables its detected GPU backend by "
+            "default."
+        )
+    elif whisper.get("recommendation") == "offer_gpu_whisper_setup":
+        backends = sorted(
+            {
+                item.get("backend", "")
+                for item in hardware.get("devices", [])
+                if item.get("backend")
+            }
+        )
+        guidance.append(
+            "GPU-capable hardware was detected"
+            + (f" ({', '.join(backends)})" if backends else "")
+            + ", but whisper-cli is missing. Tell the user that local GPU "
+            "ASR is optional, offer installation of a matching GPU-enabled "
+            "whisper.cpp runtime and model, obtain approval before installing "
+            "anything, then rerun bootstrap status and doctor. Until then, "
+            "keep the configured ASR provider."
+        )
+    elif whisper.get("recommendation") == "offer_gpu_whisper_runtime":
+        guidance.append(
+            "GPU-capable hardware and whisper-cli were found, but no GPU "
+            "backend was loaded. Offer a matching GPU-enabled whisper.cpp "
+            "build and rerun bootstrap status after installation; do not "
+            "claim or force GPU use before verification."
+        )
+    else:
+        guidance.append(
+            "Do not switch ASR providers for presumed GPU acceleration; "
+            "keep the configured provider because no loaded whisper.cpp GPU "
+            "backend was verified."
+        )
+    if frames.get("recommendation") == "use_cpu_frame_extraction":
+        guidance.append(
+            "Use the normal frame extraction path. Do not add FFmpeg GPU "
+            "flags because the current video-sum frame pipeline does not "
+            "support them."
+        )
+    return guidance
+
+
 def status_payload(install_dir: Path | None = None) -> dict:
     video_sum = locate_video_sum(install_dir)
     version = ""
@@ -111,6 +365,18 @@ def status_payload(install_dir: Path | None = None) -> dict:
     ffmpeg = runtime_checks.get("ffmpeg", {})
     yt_dlp = runtime_checks.get("yt-dlp", {})
     whisper = shutil.which("whisper-cli") or ""
+    hardware_acceleration = gpu_hardware_probe()
+    whisper_acceleration = whisper_gpu_probe(
+        whisper,
+        hardware_acceleration,
+    )
+    bundled_ffmpeg = ffmpeg.get("detail", "")
+    ffmpeg_probe_executable = (
+        bundled_ffmpeg
+        if bundled_ffmpeg and Path(bundled_ffmpeg).is_file()
+        else (shutil.which("ffmpeg") or "")
+    )
+    frame_acceleration = ffmpeg_gpu_probe(ffmpeg_probe_executable)
     ready = bool(
         video_sum
         and version
@@ -148,6 +414,16 @@ def status_payload(install_dir: Path | None = None) -> dict:
                 "path": whisper,
             },
         },
+        "acceleration": {
+            "hardware": hardware_acceleration,
+            "whisper_cpp": whisper_acceleration,
+            "frame_extraction": frame_acceleration,
+        },
+        "ai_guidance": acceleration_guidance(
+            hardware_acceleration,
+            whisper_acceleration,
+            frame_acceleration,
+        ),
     }
 
 

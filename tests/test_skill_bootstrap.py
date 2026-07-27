@@ -26,6 +26,10 @@ def test_bootstrap_status_is_structured():
     assert payload["event"] == "bootstrap_status"
     assert "video_sum" in payload["checks"]
     assert "ffmpeg" in payload["checks"]
+    assert "hardware" in payload["acceleration"]
+    assert "whisper_cpp" in payload["acceleration"]
+    assert "frame_extraction" in payload["acceleration"]
+    assert payload["ai_guidance"]
     assert payload["target"] in {
         "darwin-arm64",
         "darwin-x64",
@@ -111,3 +115,119 @@ def test_status_prefers_managed_bundle_over_path(tmp_path):
         patch.object(bootstrap.shutil, "which", return_value="/old/video-sum"),
     ):
         assert bootstrap.locate_video_sum(tmp_path) == str(managed)
+
+
+def test_whisper_gpu_probe_requires_loaded_backend():
+    help_only = subprocess.CompletedProcess(
+        ["whisper-cli", "--help"],
+        0,
+        stdout="--no-gpu disable GPU\n--device N GPU device",
+        stderr="load_backend: loaded CPU backend",
+    )
+    with patch.object(bootstrap, "run", return_value=help_only):
+        probe = bootstrap.whisper_gpu_probe("/bin/whisper-cli")
+
+    assert probe["status"] == "unverified"
+    assert probe["gpu_capable"] is False
+    assert probe["recommendation"] == "keep_configured_asr_provider"
+
+
+def test_whisper_gpu_probe_recommends_detected_backend():
+    metal = subprocess.CompletedProcess(
+        ["whisper-cli", "--help"],
+        0,
+        stdout="--no-gpu disable GPU\n--device N GPU device",
+        stderr="load_backend: loaded Metal backend",
+    )
+    with patch.object(bootstrap, "run", return_value=metal):
+        probe = bootstrap.whisper_gpu_probe("/bin/whisper-cli")
+
+    assert probe["status"] == "available"
+    assert probe["gpu_capable"] is True
+    assert probe["backend"] == "metal"
+    assert probe["recommendation"] == "prefer_whisper_cpp_gpu"
+
+
+def test_missing_whisper_with_gpu_candidate_offers_setup():
+    hardware = {
+        "candidate": True,
+        "devices": [{"backend": "cuda", "device": "Example GPU"}],
+    }
+
+    probe = bootstrap.whisper_gpu_probe("", hardware)
+    frames = {"recommendation": "use_cpu_frame_extraction"}
+    guidance = bootstrap.acceleration_guidance(hardware, probe, frames)
+
+    assert probe["status"] == "runtime_missing"
+    assert probe["gpu_capable"] is False
+    assert probe["recommendation"] == "offer_gpu_whisper_setup"
+    assert "whisper-cli is missing" in guidance[0]
+
+
+def test_hardware_probe_does_not_require_whisper_runtime():
+    profiler = subprocess.CompletedProcess(
+        ["system_profiler", "SPDisplaysDataType", "-json"],
+        0,
+        stdout=json.dumps(
+            {
+                "SPDisplaysDataType": [
+                    {
+                        "sppci_model": "Example Radeon",
+                        "spdisplays_mtlgpufamilysupport": "spdisplays_metal3",
+                    }
+                ]
+            }
+        ),
+        stderr="",
+    )
+
+    def fake_which(name):
+        return "/usr/sbin/system_profiler" if name == "system_profiler" else None
+
+    with (
+        patch.object(bootstrap.platform, "system", return_value="Darwin"),
+        patch.object(bootstrap.platform, "machine", return_value="x86_64"),
+        patch.object(bootstrap.shutil, "which", side_effect=fake_which),
+        patch.object(bootstrap, "run", return_value=profiler),
+    ):
+        probe = bootstrap.gpu_hardware_probe()
+
+    assert probe["status"] == "candidate_detected"
+    assert probe["devices"] == [
+        {"backend": "metal", "device": "Example Radeon"}
+    ]
+
+
+def test_installed_cpu_runtime_with_gpu_candidate_offers_gpu_build():
+    cpu_only = subprocess.CompletedProcess(
+        ["whisper-cli", "--help"],
+        0,
+        stdout="--no-gpu disable GPU",
+        stderr="load_backend: loaded CPU backend",
+    )
+    hardware = {
+        "candidate": True,
+        "devices": [{"backend": "metal", "device": "Example GPU"}],
+    }
+    with patch.object(bootstrap, "run", return_value=cpu_only):
+        probe = bootstrap.whisper_gpu_probe("/bin/whisper-cli", hardware)
+
+    assert probe["status"] == "runtime_gpu_unverified"
+    assert probe["recommendation"] == "offer_gpu_whisper_runtime"
+
+
+def test_ffmpeg_probe_does_not_claim_supported_frame_path():
+    ffmpeg = subprocess.CompletedProcess(
+        ["ffmpeg", "-hide_banner", "-hwaccels"],
+        0,
+        stdout="Hardware acceleration methods:\nvideotoolbox\n",
+        stderr="",
+    )
+    with patch.object(bootstrap, "run", return_value=ffmpeg):
+        probe = bootstrap.ffmpeg_gpu_probe("/bin/ffmpeg")
+
+    assert probe["status"] == "unsupported"
+    assert probe["gpu_capable"] is False
+    assert probe["probe_executable"] == "/bin/ffmpeg"
+    assert probe["ffmpeg_hwaccels"] == ["videotoolbox"]
+    assert probe["recommendation"] == "use_cpu_frame_extraction"

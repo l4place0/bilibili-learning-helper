@@ -23,6 +23,28 @@ pinned GitHub Release download plan, and obtain explicit approval before using
 `--apply`. Never clone the repository or install Python packages during normal
 recovery.
 
+Consume `acceleration` and `ai_guidance` from bootstrap status before choosing
+an ASR path:
+
+- Treat `acceleration.hardware` only as a dependency-free hardware candidate
+  probe. It does not prove that a compatible runtime is installed.
+- If `acceleration.whisper_cpp.recommendation` is
+  `prefer_whisper_cpp_gpu`, the user did not select another provider, and
+  `doctor --asr-profile balanced` is healthy, prefer
+  `--asr-profile balanced`. The detected whisper.cpp GPU backend is enabled by
+  default; do not invent additional GPU flags.
+- If the recommendation is `offer_gpu_whisper_setup` or
+  `offer_gpu_whisper_runtime`, tell the user which hardware backend was
+  detected and offer a matching GPU-enabled whisper.cpp runtime and model.
+  Obtain approval before installing dependencies, then rerun bootstrap status
+  and doctor. Keep the configured ASR provider until the backend is verified.
+- If the probe is `unverified` or `unavailable`, keep the configured provider.
+  Do not infer GPU support merely from installed GPU hardware or a
+  `--no-gpu` help option.
+- Always obey `frame_extraction.recommendation`. The current CLI frame pipeline
+  is CPU-only even when bundled FFmpeg reports hardware acceleration methods;
+  never add unsupported FFmpeg flags.
+
 Run `<command> doctor --asr-profile <profile>` when capability state is
 unknown or after a missing-tool or missing-provider failure. Consume its
 structured checks; do not ask for credentials that are already configured.
