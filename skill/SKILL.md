@@ -3,9 +3,10 @@ name: bilibili-learning-helper
 description: >-
   Ingest Bilibili or YouTube videos into a local resource library through the
   video-sum CLI. Use when the user shares a video URL or share text, asks for a
-  video summary/transcript/key frames, or asks to save video learning material
-  into a local folder. The Skill interprets intent and composes deterministic
-  CLI primitives.
+  video summary/transcript/key frames, asks to save video learning material
+  into a local folder, or wants to diagnose and report a problem encountered
+  in that workflow. The Skill interprets intent and composes deterministic CLI
+  primitives.
 ---
 
 # Video Learning Resource Ingestion
@@ -219,10 +220,25 @@ If `ffmpeg` or `yt-dlp` is missing, report the missing dependency. If ASR
 credentials or local model capability are missing, ask the user which
 configured transcription provider to use; do not silently switch providers.
 
+If the problem remains unresolved, appears to be a product defect, or required
+an undocumented workaround, offer to report it:
+
+> 这个问题可能值得反馈给维护者。要我替你收集脱敏诊断、检查重复项、起草并创建 GitHub Issue 吗？提交前我会先把完整草稿给你确认，你不需要手动填写表单。
+
+When the user accepts, read
+[issue-reporting.md](references/issue-reporting.md) and complete the workflow
+through the AI. Do not merely send the user to an empty form. Creating an Issue
+is an external write: show the sanitized title and body and obtain explicit
+confirmation immediately before submission. If no authenticated GitHub tool is
+available, return the complete ready-to-submit draft and the repository Issue
+URL instead of requesting credentials or claiming success.
+
 ## Safety
 
 - Never delete or overwrite resources without explicit user authorization.
 - Never echo API keys, cookies, or authorization headers.
+- Never attach private video content, full transcripts, cookies, API keys,
+  authorization headers, or local usernames to an Issue.
 - Do not reimplement downloading, transcription, frame extraction, summary
   generation, or note rendering in shell/Python snippets; invoke the CLI
   primitive.
