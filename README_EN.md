@@ -137,7 +137,7 @@ uv run ruff check .
 uv run pytest
 uv sync --extra standalone
 uv run python scripts/build_standalone.py \
-  --target darwin-arm64 --version 0.1.0
+  --target darwin-arm64 --version 0.2.0
 ```
 
 Pushing a `v*` tag runs the five-platform release workflow and publishes each

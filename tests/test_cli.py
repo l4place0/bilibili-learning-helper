@@ -88,7 +88,7 @@ def test_version():
 
     result = CliRunner().invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert "0.2.0" in result.output
 
 
 def test_doctor_reports_structured_checks(tmp_path):

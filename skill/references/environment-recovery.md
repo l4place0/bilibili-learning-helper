@@ -32,7 +32,7 @@ The Skill defaults to:
 
 ```text
 repository: l4place0/bilibili-learning-helper
-version: 0.1.0
+version: 0.2.0
 ```
 
 Each platform asset contains the CLI, Python runtime, Python dependencies,

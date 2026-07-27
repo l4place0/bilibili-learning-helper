@@ -19,7 +19,7 @@ from pathlib import Path
 
 
 DEFAULT_REPOSITORY = "l4place0/bilibili-learning-helper"
-DEFAULT_VERSION = "0.1.0"
+DEFAULT_VERSION = "0.2.0"
 ASR_MODEL_FILENAMES = {
     "fast": "ggml-base-q5_1.bin",
     "balanced": "ggml-small-q5_1.bin",
