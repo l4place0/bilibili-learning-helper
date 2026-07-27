@@ -169,7 +169,9 @@ def test_ingestion_reuses_content_addressed_cache(tmp_path):
     assert download_count == 1
     assert asr_count == 1
     assert frame_count == 1
-    manifest = json.loads(second.manifest_path.read_text())
+    manifest = json.loads(
+        second.manifest_path.read_text(encoding="utf-8")
+    )
     assert manifest["cache_keys"]["transcript"]
     assert first.resource_id == second.resource_id
 
