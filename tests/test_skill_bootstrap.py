@@ -5,6 +5,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -13,6 +14,31 @@ SPEC = importlib.util.spec_from_file_location("skill_bootstrap", SCRIPT)
 assert SPEC and SPEC.loader
 bootstrap = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(bootstrap)
+
+
+def onboard_args(tmp_path, **overrides):
+    values = {
+        "action": "plan",
+        "scope": "project",
+        "project_dir": tmp_path,
+        "install_dir": tmp_path / "bin",
+        "library_dir": str(tmp_path / "notes"),
+        "cache_dir": str(tmp_path / "cache"),
+        "model_dir": str(tmp_path / "models"),
+        "cookies_path": "",
+        "whisper_cpp_executable": "",
+        "asr_provider": "openai",
+        "asr_profile": "balanced",
+        "asr_endpoint": "",
+        "language": "zh",
+        "frames": 10,
+        "frame_mode": "hybrid",
+        "cache_policy": "reuse",
+        "update": False,
+        "apply": False,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
 
 def test_bootstrap_status_is_structured():
@@ -60,6 +86,243 @@ def test_bootstrap_install_requires_apply():
     assert payload["repository"] == "owner/repository"
     assert "/releases/download/v1.2.3/" in payload["asset_url"]
     assert payload["checksum_url"].endswith(".sha256")
+
+
+def test_windows_user_config_uses_local_app_data(monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", "C:/Users/example/AppData/Local")
+    with patch.object(bootstrap.platform, "system", return_value="Windows"):
+        path = bootstrap.default_user_config_file()
+
+    assert path == Path(
+        "C:/Users/example/AppData/Local/video-sum/config.env"
+    )
+
+
+def test_onboard_plan_is_side_effect_free(tmp_path):
+    args = onboard_args(tmp_path)
+    hardware = {"candidate": False, "devices": []}
+    whisper = {"status": "runtime_missing", "gpu_capable": False}
+    with (
+        patch.object(
+            bootstrap,
+            "gpu_hardware_probe",
+            return_value=hardware,
+        ),
+        patch.object(
+            bootstrap,
+            "whisper_gpu_probe",
+            return_value=whisper,
+        ),
+    ):
+        payload = bootstrap.onboard_payload(args)
+
+    assert payload["event"] == "onboard_plan"
+    assert payload["side_effects"] is False
+    assert payload["requires_approval"] is True
+    assert payload["runtime"]["download"] is None
+    assert not (tmp_path / ".env").exists()
+    assert not (tmp_path / "notes").exists()
+    assert not (tmp_path / "cache").exists()
+
+
+def test_onboard_apply_is_idempotent_and_redacts_secrets(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("ASR_API_KEY", "super-secret")
+    args = onboard_args(tmp_path, apply=True)
+    hardware = {"candidate": False, "devices": []}
+    whisper = {"status": "runtime_missing", "gpu_capable": False}
+    healthy = {"name": "doctor", "available": True, "returncode": 0}
+    asr = {"name": "asr", "provider": "openai", "available": True}
+    with (
+        patch.object(
+            bootstrap,
+            "gpu_hardware_probe",
+            return_value=hardware,
+        ),
+        patch.object(
+            bootstrap,
+            "whisper_gpu_probe",
+            return_value=whisper,
+        ),
+        patch.object(
+            bootstrap,
+            "doctor_onboard_check",
+            return_value=healthy,
+        ),
+        patch.object(
+            bootstrap,
+            "asr_onboard_check",
+            return_value=asr,
+        ),
+    ):
+        first = bootstrap.onboard_payload(args)
+        content = (tmp_path / ".env").read_text(encoding="utf-8")
+        second = bootstrap.onboard_payload(args)
+
+    assert first["event"] == "onboard_done"
+    assert first["ready"] is True
+    assert second["idempotent"] is True
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == content
+    assert (tmp_path / "notes").is_dir()
+    assert (tmp_path / "cache").is_dir()
+    serialized = json.dumps(second)
+    assert "super-secret" not in serialized
+    assert second["effective"]["secrets"]["ASR_API_KEY"] == {
+        "configured": True,
+        "source": "environment",
+    }
+
+
+def test_onboard_rerun_without_options_preserves_confirmed_values(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("ASR_API_KEY", "configured")
+    explicit = onboard_args(
+        tmp_path,
+        apply=True,
+        library_dir=str(tmp_path / "notes with spaces"),
+        language="ja",
+        frames=7,
+    )
+    defaults = onboard_args(
+        tmp_path,
+        apply=True,
+        library_dir="",
+        cache_dir="",
+        model_dir="",
+        asr_provider=None,
+        asr_profile=None,
+        asr_endpoint=None,
+        language=None,
+        frames=None,
+        frame_mode=None,
+        cache_policy=None,
+    )
+    hardware = {"candidate": False, "devices": []}
+    healthy = {"name": "doctor", "available": True, "returncode": 0}
+    asr = {"name": "asr", "provider": "openai", "available": True}
+    with (
+        patch.object(
+            bootstrap,
+            "gpu_hardware_probe",
+            return_value=hardware,
+        ),
+        patch.object(
+            bootstrap,
+            "whisper_gpu_probe",
+            return_value={},
+        ),
+        patch.object(
+            bootstrap,
+            "doctor_onboard_check",
+            return_value=healthy,
+        ),
+        patch.object(
+            bootstrap,
+            "asr_onboard_check",
+            return_value=asr,
+        ),
+    ):
+        first = bootstrap.onboard_payload(explicit)
+        second = bootstrap.onboard_payload(defaults)
+
+    assert first["event"] == "onboard_done"
+    assert second["event"] == "onboard_done"
+    assert second["idempotent"] is True
+    assert (
+        second["effective"]["values"]["VIDEO_SUM_LIBRARY_DIR"]["value"]
+        == str(tmp_path / "notes with spaces")
+    )
+    assert (
+        second["effective"]["values"]["VIDEO_SUM_DEFAULT_LANGUAGE"]["value"]
+        == "ja"
+    )
+    assert (
+        second["effective"]["values"]["VIDEO_SUM_DEFAULT_FRAMES"]["value"]
+        == "7"
+    )
+
+
+def test_onboard_apply_preserves_conflicting_config_without_update(tmp_path):
+    config = tmp_path / ".env"
+    config.write_text(
+        f"VIDEO_SUM_LIBRARY_DIR={tmp_path / 'existing'}\n",
+        encoding="utf-8",
+    )
+    args = onboard_args(tmp_path, apply=True)
+    with (
+        patch.object(
+            bootstrap,
+            "gpu_hardware_probe",
+            return_value={"candidate": False, "devices": []},
+        ),
+        patch.object(
+            bootstrap,
+            "whisper_gpu_probe",
+            return_value={},
+        ),
+    ):
+        payload = bootstrap.onboard_payload(args)
+
+    assert payload["event"] == "bootstrap_error"
+    assert payload["stage"] == "onboard_config"
+    assert "--update" in payload["error"]
+    assert "existing" in config.read_text(encoding="utf-8")
+
+
+def test_onboard_status_reports_layer_sources_without_secret_values(
+    monkeypatch,
+    tmp_path,
+):
+    user_config = tmp_path / "user.env"
+    user_config.write_text(
+        f"VIDEO_SUM_LIBRARY_DIR={tmp_path / 'user-notes'}\n"
+        "ASR_API_KEY=user-secret\n"
+        "ASR_ENDPOINT=https://agent:endpoint-secret@example.test/asr"
+        "?token=query-secret\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        f"VIDEO_SUM_LIBRARY_DIR={tmp_path / 'project-notes'}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VIDEO_SUM_CACHE_DIR", str(tmp_path / "env-cache"))
+    with patch.object(
+        bootstrap,
+        "default_user_config_file",
+        return_value=user_config,
+    ):
+        payload = bootstrap.onboard_payload(
+            onboard_args(tmp_path, action="status"),
+        )
+
+    assert payload["event"] == "onboard_status"
+    assert payload["values"]["VIDEO_SUM_LIBRARY_DIR"]["source"] == "project"
+    assert payload["values"]["VIDEO_SUM_CACHE_DIR"]["source"] == "environment"
+    assert payload["secrets"]["ASR_API_KEY"] == {
+        "configured": True,
+        "source": "user",
+    }
+    serialized = json.dumps(payload)
+    assert "user-secret" not in serialized
+    assert "endpoint-secret" not in serialized
+    assert "query-secret" not in serialized
+    assert (
+        payload["values"]["ASR_ENDPOINT"]["value"]
+        == "https://example.test/asr?token=redacted"
+    )
+
+
+def test_onboard_rejects_relative_paths(tmp_path):
+    args = onboard_args(tmp_path, library_dir="relative/notes")
+    payload = bootstrap.onboard_payload(args)
+
+    assert payload["event"] == "bootstrap_error"
+    assert payload["stage"] == "onboard_plan"
+    assert "absolute path" in payload["error"]
 
 
 def test_release_install_verifies_and_atomically_installs(tmp_path):

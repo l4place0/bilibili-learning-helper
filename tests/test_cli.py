@@ -1,6 +1,10 @@
 """Tests for the core video-sum CLI."""
 
+import io
 import json
+import os
+import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -19,6 +23,39 @@ def test_emit_json_line(capsys):
 def test_emit_unicode(capsys):
     emit("test", title="测试标题")
     assert json.loads(capsys.readouterr().out)["title"] == "测试标题"
+
+
+def test_emit_reconfigures_legacy_stdout_to_utf8():
+    from cli import output
+
+    raw = io.BytesIO()
+    legacy_stdout = io.TextIOWrapper(raw, encoding="gbk")
+    with patch.object(output.sys, "stdout", legacy_stdout):
+        output.emit("test", title="中文 🎬")
+        legacy_stdout.flush()
+    legacy_stdout.detach()
+
+    assert json.loads(raw.getvalue().decode("utf-8"))["title"] == "中文 🎬"
+
+
+def test_emit_unicode_with_gbk_process_default():
+    environment = dict(os.environ)
+    environment["PYTHONIOENCODING"] = "gbk"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from cli.output import emit; "
+                "emit('test', title='中文 🎬')"
+            ),
+        ],
+        capture_output=True,
+        env=environment,
+        check=True,
+    )
+
+    assert json.loads(result.stdout.decode("utf-8"))["title"] == "中文 🎬"
 
 
 def test_emit_error_exits():
@@ -71,6 +108,34 @@ def test_doctor_reports_structured_checks(tmp_path):
     data = json.loads(result.output)
     assert data["event"] == "doctor"
     assert data["healthy"] is True
+
+
+def test_capture_uses_configured_defaults():
+    from cli import main
+    from core.config import settings
+
+    with (
+        patch.object(settings, "default_language", "ja"),
+        patch.object(settings, "default_frames", 4),
+        patch.object(settings, "default_frame_mode", "scene"),
+        patch.object(settings, "default_cache_policy", "off"),
+        patch.object(settings, "asr_provider", "whisper-cpp"),
+        patch.object(settings, "asr_profile", "accurate"),
+        patch("cli.commands._run_ingestion") as run_ingestion,
+    ):
+        result = CliRunner().invoke(
+            main,
+            ["capture", "https://example.com/video"],
+        )
+
+    assert result.exit_code == 0
+    assert run_ingestion.call_args.args[1] == "ja"
+    assert run_ingestion.call_args.args[3] == "accurate"
+    assert run_ingestion.call_args.args[5] == 4
+    assert run_ingestion.call_args.kwargs == {
+        "frame_mode": "scene",
+        "cache_policy": "off",
+    }
 
 
 def test_asr_profiles_reports_installed_models(tmp_path):

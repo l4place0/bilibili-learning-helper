@@ -4,9 +4,9 @@ description: >-
   Ingest Bilibili or YouTube videos into a local resource library through the
   video-sum CLI. Use when the user shares a video URL or share text, asks for a
   video summary/transcript/key frames, asks to save video learning material
-  into a local folder, or wants to diagnose and report a problem encountered
-  in that workflow. The Skill interprets intent and composes deterministic CLI
-  primitives.
+  into a local folder, needs first-install configuration, or wants to diagnose
+  and report a problem encountered in that workflow. The Skill interprets
+  intent and composes deterministic CLI primitives.
 ---
 
 # Video Learning Resource Ingestion
@@ -23,6 +23,36 @@ the runtime is missing or broken, read
 pinned GitHub Release download plan, and obtain explicit approval before using
 `--apply`. Never clone the repository or install Python packages during normal
 recovery.
+
+Before the first capture or compose operation, run
+`python3 scripts/bootstrap.py onboard status` on macOS/Linux
+(`py -3 scripts/bootstrap.py onboard status` on Windows). Consume the
+secret-safe effective values and their sources. Configuration precedence is:
+explicit CLI argument, process environment, project `.env`, user
+`config.env`, then built-in default.
+
+If library, cache, or ASR configuration has not been confirmed, compose an
+onboarding plan with absolute paths and explicit options:
+
+```bash
+python3 scripts/bootstrap.py onboard \
+  --scope project \
+  --library-dir "<absolute-library-path>" \
+  --cache-dir "<absolute-cache-path>" \
+  --asr-provider whisper-cpp \
+  --asr-profile balanced
+```
+
+Show the returned `onboard_plan` and obtain explicit approval before rerunning
+with `--apply`. Applying may create directories and write project or user
+configuration. Existing differing values are preserved unless the user
+approves `--update`. Treat `onboard_done.ready=false` as a blocked setup and
+report the failed checks; do not start a capture.
+
+The project does not publish a GPU-specific whisper.cpp runtime. Never invent
+a CUDA download URL or imply that hardware detection proves backend support.
+Configure only an existing absolute `whisper-cli` path or a separately
+verified runtime whose installation the user approved.
 
 Consume `acceleration` and `ai_guidance` from bootstrap status before choosing
 an ASR path:

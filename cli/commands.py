@@ -450,7 +450,7 @@ def library_search(query, output_dir):
 @click.command()
 @click.argument("url")
 @click.option("--output-dir", default="", type=click.Path(file_okay=False))
-@click.option("--lang", default="zh", type=click.Choice(["zh", "en", "ja"]))
+@click.option("--lang", default=None, type=click.Choice(["zh", "en", "ja"]))
 @click.option(
     "--asr-provider",
     default="",
@@ -462,16 +462,16 @@ def library_search(query, output_dir):
     type=click.Choice(["fast", "balanced", "accurate"]),
     help="Local whisper.cpp model profile",
 )
-@click.option("--frames", default=10, type=click.IntRange(0, 100))
+@click.option("--frames", default=None, type=click.IntRange(0, 100))
 @click.option(
     "--frame-mode",
-    default="hybrid",
+    default=None,
     type=click.Choice(["hybrid", "timestamp", "scene", "fps"]),
 )
 @click.option(
     "--cache",
     "cache_policy",
-    default="reuse",
+    default=None,
     type=click.Choice(["reuse", "refresh", "off"]),
 )
 @click.option("--force", is_flag=True)
@@ -487,14 +487,21 @@ def capture(
     force,
 ):
     """Capture transcript and frames without invoking an internal LLM."""
+    from core.config import settings
+
+    selected_profile = asr_profile or (
+        settings.asr_profile
+        if not asr_provider and settings.asr_provider == "whisper-cpp"
+        else ""
+    )
     _run_ingestion(
         url,
-        lang,
+        lang or settings.default_language,
         asr_provider,
-        asr_profile or "",
+        selected_profile,
         output_dir,
-        frames,
+        settings.default_frames if frames is None else frames,
         force,
-        frame_mode=frame_mode,
-        cache_policy=cache_policy,
+        frame_mode=frame_mode or settings.default_frame_mode,
+        cache_policy=cache_policy or settings.default_cache_policy,
     )

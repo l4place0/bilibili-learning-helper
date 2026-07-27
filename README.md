@@ -95,6 +95,27 @@ FFmpeg。Whisper 模型和 `whisper-cli` 不随包发布；选择本地 whisper.
 Skill 会下载同名 `.sha256` 文件完成校验，再原子安装到用户级 bin 目录。
 后续始终使用 `bootstrap.py status` 返回的绝对 `command`。
 
+安装 CLI 后先生成首次配置计划：
+
+```bash
+python3 skill/scripts/bootstrap.py onboard \
+  --scope project \
+  --library-dir "/绝对路径/video-notes" \
+  --cache-dir "/绝对路径/video-cache" \
+  --asr-provider whisper-cpp \
+  --asr-profile balanced
+# 审核配置文件、目录和运行时探针后：
+python3 skill/scripts/bootstrap.py onboard ... --apply
+python3 skill/scripts/bootstrap.py onboard status
+```
+
+`onboard` 默认只输出无副作用计划；`--apply` 才创建目录和原子写入配置。
+已有不同值不会被覆盖，除非显式使用 `--update`。用户级配置写入系统配置
+目录下的 `video-sum/config.env`，项目级配置写入当前项目 `.env`。
+状态输出会标明每个有效值的来源，并只报告凭据是否存在，不回显秘密。
+项目目前没有发布 CUDA 专用 whisper.cpp 产物；硬件探针只提供保守建议，
+不会生成虚构下载地址或把 GPU 硬件存在误报成后端已经加载。
+
 ## 使用
 
 先采集原生材料：
@@ -154,9 +175,14 @@ video-sum asr profiles
 VIDEO_SUM_LIBRARY_DIR=/Users/you/Documents/video-notes
 VIDEO_SUM_CACHE_DIR=/Users/you/Library/Caches/video-sum
 VIDEO_SUM_MODEL_DIR=/Users/you/Library/Application Support/video-sum/models
+VIDEO_SUM_DEFAULT_LANGUAGE=zh
+VIDEO_SUM_DEFAULT_FRAMES=10
+VIDEO_SUM_DEFAULT_FRAME_MODE=hybrid
+VIDEO_SUM_DEFAULT_CACHE_POLICY=reuse
 ```
 
-路径优先级为：CLI 参数 > 环境变量 > `.env` > 操作系统默认值。
+路径和默认项优先级为：CLI 参数 > 环境变量 > 项目 `.env` > 用户
+`config.env` > 操作系统/内置默认值。
 缓存 manifest 只保存稳定 cache key，入选帧会复制到 `assets/`，因此笔记
 可以整体搬移。
 
