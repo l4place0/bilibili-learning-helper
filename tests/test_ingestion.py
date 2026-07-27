@@ -185,18 +185,29 @@ def test_cli_capture_emits_structured_done_event(tmp_path):
     }
 
     runner = CliRunner()
-    with patch("core.ingestion.IngestionService.ingest", return_value=record):
+    with patch(
+        "core.ingestion.IngestionService.ingest", return_value=record
+    ) as mock_ingest:
         result = runner.invoke(
             main,
-            ["capture", SHARE_TEXT, "--output-dir", str(tmp_path)],
+            [
+                "capture",
+                SHARE_TEXT,
+                "--output-dir",
+                str(tmp_path),
+                "--fact-check",
+                "important",
+            ],
         )
 
     assert result.exit_code == 0
     events = [json.loads(line) for line in result.output.strip().splitlines()]
     assert events[0]["schema_version"] == 1
     assert events[0]["event"] == "started"
+    assert events[0]["fact_check_mode"] == "important"
     assert events[-1]["event"] == "done"
     assert events[-1]["resource_id"] == "bilibili-BV12qKq6PETb"
+    assert mock_ingest.call_args.args[0].fact_check_mode == "important"
 
 
 def test_cli_asr_profile_selects_whisper_cpp_model(tmp_path):
@@ -290,3 +301,183 @@ def test_note_injects_mermaid_and_selected_frame(tmp_path):
     assert "{{frame:1}}" not in note
     assert "assets/bilibili-BV1visual-frame-0001.webp" in note
     assert not (tmp_path / "library" / "assets" / "bilibili-BV1visual").exists()
+
+
+def test_compose_adds_completed_fact_check_to_note_and_manifest(tmp_path):
+    library = FilesystemLibrary(tmp_path / "library")
+    captured = library.save(
+        platform="bilibili",
+        video_id="BV1fact",
+        source_url="https://example.test/video",
+        metadata={"title": "事实核验样本"},
+        summary="",
+        understanding="",
+        transcript="[00:30] 产品于 2025 年发布。",
+        transcript_segments=[],
+        frames=[],
+        providers={"asr": "test", "llm": "host"},
+    )
+    fact_check = {
+        "status": "completed",
+        "mode": "important",
+        "checked_at": "2026-07-27",
+        "claims": [
+            {
+                "claim": "产品于 2025 年发布。",
+                "timestamp": "00:30",
+                "classification": "time_sensitive_fact",
+                "status": "confirmed",
+                "video_statement": "产品于 2025 年发布。",
+                "verified_result": "官方公告发布日期为 2025 年。",
+                "sources": [
+                    {
+                        "title": "官方公告",
+                        "url": "https://example.test/announcement",
+                        "source_type": "primary",
+                    }
+                ],
+            }
+        ],
+    }
+
+    composed = library.compose(
+        captured.resource_id,
+        summary="总结内容",
+        understanding='```mermaid\nflowchart TD\n  A["声明"] --> B["核验"]\n```',
+        fact_check=fact_check,
+        fact_check_mode="important",
+    )
+
+    note = composed.note_path.read_text(encoding="utf-8")
+    manifest = json.loads(composed.manifest_path.read_text(encoding="utf-8"))
+    assert "## 外部事实核验" in note
+    assert "声明 1（00:30）" in note
+    assert "[官方公告](https://example.test/announcement)" in note
+    assert note.index("## 外部事实核验") < note.index("# Data")
+    assert manifest["fact_check"]["status"] == "completed"
+
+
+def test_skipped_fact_check_is_visible_and_does_not_block_compose(tmp_path):
+    library = FilesystemLibrary(tmp_path / "library")
+    captured = library.save(
+        platform="bilibili",
+        video_id="BV1skip",
+        source_url="https://example.test/video",
+        metadata={"title": "跳过核验样本"},
+        summary="",
+        understanding="",
+        transcript="[00:00] 原始转写",
+        transcript_segments=[],
+        frames=[],
+        providers={"asr": "test", "llm": "host"},
+    )
+
+    composed = library.compose(
+        captured.resource_id,
+        summary="正常生成的总结",
+        understanding='```mermaid\nflowchart TD\n  A["输入"] --> B["总结"]\n```',
+        fact_check={
+            "status": "skipped",
+            "mode": "auto",
+            "reason": "no_web_access",
+            "message": "当前宿主无法访问外部网页。",
+            "claims": [],
+        },
+    )
+
+    note = composed.note_path.read_text(encoding="utf-8")
+    assert "正常生成的总结" in note
+    assert "原因代码：`no_web_access`" in note
+    assert "不代表已由独立来源确认" in note
+
+
+def test_required_fact_check_blocks_missing_payload(tmp_path):
+    library = FilesystemLibrary(tmp_path / "library")
+    captured = library.save(
+        platform="bilibili",
+        video_id="BV1required",
+        source_url="https://example.test/video",
+        metadata={"title": "强制核验样本"},
+        summary="",
+        understanding="",
+        transcript="[00:00] 原始转写",
+        transcript_segments=[],
+        frames=[],
+        providers={"asr": "test", "llm": "host"},
+        fact_check_mode="required",
+    )
+
+    try:
+        library.compose(
+            captured.resource_id,
+            summary="总结",
+            understanding=(
+                '```mermaid\nflowchart TD\n  A["输入"] --> B["总结"]\n```'
+            ),
+        )
+    except ValueError as exc:
+        assert "required fact checking needs" in str(exc)
+    else:
+        raise AssertionError("required mode must reject a missing fact check")
+
+
+def test_cli_compose_fact_check_file_overrides_content_payload(tmp_path):
+    from cli import main
+
+    library = FilesystemLibrary(tmp_path)
+    captured = library.save(
+        platform="bilibili",
+        video_id="BV1cli-fact",
+        source_url="https://example.test/video",
+        metadata={"title": "CLI 核验样本"},
+        summary="",
+        understanding="",
+        transcript="[00:00] 原始转写",
+        transcript_segments=[],
+        frames=[],
+        providers={"asr": "test", "llm": "host"},
+    )
+    content_file = tmp_path / "content.json"
+    content_file.write_text(
+        json.dumps(
+            {
+                "summary": "CLI 总结",
+                "understanding": (
+                    '```mermaid\nflowchart TD\n  A["输入"] --> B["总结"]\n```'
+                ),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    fact_check_file = tmp_path / "fact-check.json"
+    fact_check_file.write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "mode": "auto",
+                "checked_at": "2026-07-27",
+                "claims": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "resource",
+            "compose",
+            captured.resource_id,
+            "--content-file",
+            str(content_file),
+            "--fact-check-file",
+            str(fact_check_file),
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    note = captured.note_path.read_text(encoding="utf-8")
+    assert "外部事实核验已完成" in note

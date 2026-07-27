@@ -84,6 +84,14 @@ class Settings(BaseSettings):
         default="reuse",
         validation_alias=AliasChoices("VIDEO_SUM_DEFAULT_CACHE_POLICY"),
     )
+    fact_check: Literal["off", "auto", "important", "all", "required"] = Field(
+        default="auto",
+        validation_alias=AliasChoices("VIDEO_SUM_FACT_CHECK"),
+    )
+    fact_check_source_policy: Literal["primary-first"] = Field(
+        default="primary-first",
+        validation_alias=AliasChoices("VIDEO_SUM_FACT_CHECK_SOURCE_POLICY"),
+    )
 
     @field_validator(
         "asr_model_dir",

@@ -110,12 +110,31 @@ After raw artifacts are available:
 
      Repeat `--at` for multiple regions. Treat scene/hybrid sampling as
      candidate generation and the host AI as the semantic selector.
-2. Give the corrected transcript and visual findings to a synthesis agent. Ask
+2. Extract externally verifiable claims from the corrected transcript before
+   synthesis. Preserve timestamps and include only `objective_fact` and
+   `time_sensitive_fact`; do not fact-check opinions or personal experience.
+   Follow the configured fact-check mode:
+   - `off`: record `skipped` with `user_disabled`.
+   - `auto`: verify important claims when search, page reading, source
+     evaluation, and budget are available; otherwise record an explicit skip.
+   - `important`: verify only decision-relevant or time-sensitive claims.
+   - `all`: attempt every extracted factual claim.
+   - `required`: stop before compose if verification cannot be completed.
+
+   Prefer official material, primary papers, datasets, benchmarks, and source
+   repositories. Use reliable secondary sources only when primary evidence is
+   unavailable. Never treat a search-result snippet as verified evidence.
+   Supported skip reason codes are `user_disabled`, `no_web_access`,
+   `no_search_tool`, `no_page_reader`, `insufficient_source_evaluation`,
+   `time_or_budget_limit`, and `source_unavailable`.
+3. Give the corrected transcript, visual findings, and fact-check result to a
+   synthesis agent. Ask
    it for the summary and `# 辅助理解` Markdown, including Mermaid diagrams and
    `{{frame:N}}` placeholders.
-3. Use a verification agent to check factual faithfulness, Mermaid syntax,
-   frame references, heading order, and preservation of raw data.
-4. Reconcile the results in the main agent and invoke the CLI once to save the
+4. Use a verification agent to check factual faithfulness, source quality,
+   claim timestamps, fact-check status, Mermaid syntax, frame references,
+   heading order, and preservation of raw data.
+5. Reconcile the results in the main agent and invoke the CLI once to save the
    resource.
 
 Give each subagent only the artifacts needed for its role and require
@@ -133,6 +152,7 @@ video-sum capture "<URL or complete share text>" \
   --lang zh \
   --frame-mode hybrid \
   --cache reuse \
+  --fact-check auto \
   --frames 10
 ```
 
@@ -165,6 +185,8 @@ Use:
 - `--cache reuse|refresh|off` defaults to `reuse`. Keep it for repeat work;
   use `refresh` only when the user asks to disregard cached artifacts, and
   `off` for cache-isolation diagnostics.
+- `--fact-check off|auto|important|all|required` selects external verification
+  strictness. Keep `auto` unless the user requests another mode.
 - `--force` only after the user explicitly asks to replace an existing resource.
 
 After delegation and verification, save the host-authored result exactly once:
@@ -175,12 +197,30 @@ video-sum resource compose "<resource_id>" \
   --understanding-file "<understanding.md>" \
   --corrected-transcript-file "<corrected-transcript.md>" \
   --corrections-file "<corrections.json>" \
+  --fact-check-file "<fact-check.json>" \
+  --fact-check auto \
   --output-dir "<destination>"
 ```
 
 The summary and understanding files must not contain level-one headings.
 The understanding file must contain at least one Mermaid diagram. The corrected
 transcript is optional only when the user explicitly declines enhancement.
+
+The fact-check file must use one of these distinct outcomes:
+
+```json
+{"schema_version":1,"status":"completed","mode":"important","checked_at":"2026-07-27","claims":[]}
+```
+
+```json
+{"schema_version":1,"status":"skipped","mode":"auto","reason":"no_web_access","message":"Host has no web search or page-reading capability.","claims":[]}
+```
+
+A completed claim must include its timestamp, classification, video statement,
+verification result, status, and linked sources. Supported claim statuses are
+`confirmed`, `partially_confirmed`, `contradicted`, `outdated`, `disputed`,
+and `unverified`. A non-`unverified` claim requires at least one linked source.
+`completed` with no claims is not the same as `skipped`.
 
 Distinguish video evidence, host inference, and external supplementation. Any
 claim introduced from outside the captured video must include a clickable

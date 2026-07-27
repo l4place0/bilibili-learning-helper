@@ -661,6 +661,8 @@ def effective_onboard_config(
         "VIDEO_SUM_DEFAULT_FRAMES": "10",
         "VIDEO_SUM_DEFAULT_FRAME_MODE": "hybrid",
         "VIDEO_SUM_DEFAULT_CACHE_POLICY": "reuse",
+        "VIDEO_SUM_FACT_CHECK": "auto",
+        "VIDEO_SUM_FACT_CHECK_SOURCE_POLICY": "primary-first",
         "VIDEO_SUM_COOKIES_PATH": str(
             default_user_data_dir() / "cookies.txt"
         ),
@@ -809,6 +811,16 @@ def onboard_values(args: argparse.Namespace) -> dict[str, str]:
             args.cache_policy,
             "reuse",
         ),
+        "VIDEO_SUM_FACT_CHECK": selected(
+            "VIDEO_SUM_FACT_CHECK",
+            args.fact_check,
+            "auto",
+        ),
+        "VIDEO_SUM_FACT_CHECK_SOURCE_POLICY": selected(
+            "VIDEO_SUM_FACT_CHECK_SOURCE_POLICY",
+            args.fact_check_source_policy,
+            "primary-first",
+        ),
     }
     allowed = {
         "ASR_PROVIDER": {"whisper-cpp", "openai", "local"},
@@ -821,6 +833,14 @@ def onboard_values(args: argparse.Namespace) -> dict[str, str]:
             "fps",
         },
         "VIDEO_SUM_DEFAULT_CACHE_POLICY": {"reuse", "refresh", "off"},
+        "VIDEO_SUM_FACT_CHECK": {
+            "off",
+            "auto",
+            "important",
+            "all",
+            "required",
+        },
+        "VIDEO_SUM_FACT_CHECK_SOURCE_POLICY": {"primary-first"},
     }
     for key, choices in allowed.items():
         if values[key] not in choices:
@@ -1253,6 +1273,16 @@ def main() -> int:
     onboard.add_argument(
         "--cache-policy",
         choices=("reuse", "refresh", "off"),
+        default=None,
+    )
+    onboard.add_argument(
+        "--fact-check",
+        choices=("off", "auto", "important", "all", "required"),
+        default=None,
+    )
+    onboard.add_argument(
+        "--fact-check-source-policy",
+        choices=("primary-first",),
         default=None,
     )
     onboard.add_argument("--update", action="store_true")

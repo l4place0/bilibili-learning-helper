@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.fact_check import normalize_fact_check, render_fact_check
+
 
 _UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MULTIPLE_SPACE = re.compile(r"\s+")
@@ -135,6 +137,8 @@ class FilesystemLibrary:
         understanding: str,
         corrected_transcript: str = "",
         corrections: list[dict[str, Any]] | None = None,
+        fact_check: dict[str, Any] | None = None,
+        fact_check_mode: str | None = None,
     ) -> ResourceRecord:
         """Compose a captured resource using host-AI authored content."""
         if not summary.strip():
@@ -143,8 +147,23 @@ class FilesystemLibrary:
             raise ValueError("understanding must contain a Mermaid diagram")
         if understanding.count("```") % 2:
             raise ValueError("understanding contains an unclosed code fence")
-
         manifest = self.get_resource(resource_id)
+        requested_mode = (
+            fact_check_mode
+            or (manifest.get("fact_check_request") or {}).get("mode")
+            or "auto"
+        )
+        normalized_fact_check = (
+            normalize_fact_check(
+                fact_check,
+                configured_mode=requested_mode,
+            )
+            if fact_check is not None
+            else None
+        )
+        if requested_mode == "required" and normalized_fact_check is None:
+            raise ValueError("required fact checking needs fact_check content")
+
         note_path = Path(manifest["note_path"])
         manifest_path = Path(manifest["manifest_path"])
         manifest.pop("note_path", None)
@@ -178,6 +197,7 @@ class FilesystemLibrary:
             corrected_transcript=corrected_transcript,
             transcript=raw_transcript,
             relative_frames=relative_frames,
+            fact_check=normalized_fact_check,
         )
 
         staging_parent = self.root / ".video-sum-staging"
@@ -192,6 +212,7 @@ class FilesystemLibrary:
             manifest["providers"] = dict(manifest.get("providers") or {})
             manifest["providers"]["llm"] = "host"
             manifest["corrections"] = corrections or []
+            manifest["fact_check"] = normalized_fact_check
             manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
             staged_manifest = stage_dir / "resource.json"
             staged_manifest.write_text(
@@ -229,6 +250,7 @@ class FilesystemLibrary:
         providers: dict[str, str],
         cache_keys: dict[str, str] | None = None,
         understanding: str = "",
+        fact_check_mode: str = "auto",
         force: bool = False,
     ) -> ResourceRecord:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -270,6 +292,7 @@ class FilesystemLibrary:
                 corrected_transcript="",
                 transcript=transcript,
                 relative_frames=relative_frames,
+                fact_check=None,
             )
             staged_note = stage_dir / note_name
             staged_note.write_text(note_text, encoding="utf-8")
@@ -285,6 +308,7 @@ class FilesystemLibrary:
                 "title": title,
                 "metadata": metadata,
                 "providers": providers,
+                "fact_check_request": {"mode": fact_check_mode},
                 "cache_keys": cache_keys or {},
                 "transcript_segments": transcript_segments,
                 "artifacts": {
@@ -336,6 +360,7 @@ class FilesystemLibrary:
         corrected_transcript: str,
         transcript: str,
         relative_frames: list[Path],
+        fact_check: dict[str, Any] | None,
     ) -> str:
         tags = metadata.get("tags") or []
         lines = [
@@ -365,6 +390,8 @@ class FilesystemLibrary:
                     "",
                 ]
             )
+        if fact_check is not None:
+            lines.extend([render_fact_check(fact_check), ""])
         lines.extend(
             [
                 "# Data",

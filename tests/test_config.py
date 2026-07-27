@@ -81,6 +81,8 @@ def test_capture_defaults_load_from_layered_config(monkeypatch, tmp_path):
         "VIDEO_SUM_DEFAULT_FRAMES",
         "VIDEO_SUM_DEFAULT_FRAME_MODE",
         "VIDEO_SUM_DEFAULT_CACHE_POLICY",
+        "VIDEO_SUM_FACT_CHECK",
+        "VIDEO_SUM_FACT_CHECK_SOURCE_POLICY",
     ):
         monkeypatch.delenv(name, raising=False)
     dotenv = tmp_path / ".env"
@@ -91,6 +93,8 @@ def test_capture_defaults_load_from_layered_config(monkeypatch, tmp_path):
                 "VIDEO_SUM_DEFAULT_FRAMES=6",
                 "VIDEO_SUM_DEFAULT_FRAME_MODE=scene",
                 "VIDEO_SUM_DEFAULT_CACHE_POLICY=off",
+                "VIDEO_SUM_FACT_CHECK=important",
+                "VIDEO_SUM_FACT_CHECK_SOURCE_POLICY=primary-first",
             ]
         ),
         encoding="utf-8",
@@ -102,6 +106,8 @@ def test_capture_defaults_load_from_layered_config(monkeypatch, tmp_path):
     assert settings.default_frames == 6
     assert settings.default_frame_mode == "scene"
     assert settings.default_cache_policy == "off"
+    assert settings.fact_check == "important"
+    assert settings.fact_check_source_policy == "primary-first"
 
 
 def test_legacy_library_dir_name_remains_supported(monkeypatch, tmp_path):
