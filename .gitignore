@@ -8,3 +8,5 @@ dist/
 build/
 release/
 .venv/
+docs/automation/state.json
+docs/automation/.state.json.lock
