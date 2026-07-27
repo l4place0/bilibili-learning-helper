@@ -8,6 +8,12 @@ broken.
 1. Run `python3 scripts/bootstrap.py status` on macOS/Linux, or
    `py -3 scripts/bootstrap.py status` on Windows.
 2. If `ready` is true, use the exact absolute executable in `command`.
+   Consume the `acceleration` probe and follow each `ai_guidance` entry.
+   Hardware candidates do not require optional dependencies, but do not prove
+   runtime support. Treat `available` as verified loaded-backend evidence,
+   `runtime_missing` and `runtime_gpu_unverified` as reasons to offer an
+   approved setup action, and `unsupported` as a prohibition on inventing
+   acceleration flags.
 3. If the CLI is missing, run `python3 scripts/bootstrap.py install` on
    macOS/Linux (or `py -3 scripts/bootstrap.py install` on Windows) without
    `--apply` and show the pinned release URL, checksum URL, target, and

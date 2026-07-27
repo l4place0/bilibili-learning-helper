@@ -1,0 +1,116 @@
+name: Bug report
+description: Report a reproducible problem with video-sum or its Codex Skill
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An AI agent can fill this form for you. Please remove credentials,
+        private video content, signed URLs, and personal filesystem paths.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe one observable problem without guessing its cause.
+      placeholder: The command reached the ASR stage and then...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: affected-stage
+    attributes:
+      label: Affected stage
+      options:
+        - bootstrap
+        - install
+        - doctor
+        - download
+        - ASR
+        - frames
+        - compose
+        - library
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: User impact
+      description: Explain what could not be completed or was degraded.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include minimal steps and sanitized CLI arguments.
+      placeholder: |
+        1. Run bootstrap status.
+        2. Run video-sum capture with...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the structured error code when available.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Paste sanitized bootstrap/doctor facts, not secrets.
+      placeholder: |
+        - video-sum version:
+        - bootstrap target:
+        - runtime source:
+        - OS/architecture:
+        - ASR provider/profile:
+        - GPU hardware probe:
+        - Whisper GPU runtime probe:
+        - frame acceleration probe:
+        - cache mode/hit:
+        - frame mode/count:
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Minimal logs
+      description: Include only the smallest sanitized NDJSON/stderr excerpt.
+      render: text
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround
+      placeholder: None found
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Include public URLs only when necessary to reproduce.
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials, cookies, private media, and personal paths.
+          required: true

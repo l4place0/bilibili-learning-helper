@@ -3,9 +3,10 @@ name: bilibili-learning-helper
 description: >-
   Ingest Bilibili or YouTube videos into a local resource library through the
   video-sum CLI. Use when the user shares a video URL or share text, asks for a
-  video summary/transcript/key frames, or asks to save video learning material
-  into a local folder. The Skill interprets intent and composes deterministic
-  CLI primitives.
+  video summary/transcript/key frames, asks to save video learning material
+  into a local folder, needs first-install configuration, or wants to diagnose
+  and report a problem encountered in that workflow. The Skill interprets
+  intent and composes deterministic CLI primitives.
 ---
 
 # Video Learning Resource Ingestion
@@ -22,6 +23,58 @@ the runtime is missing or broken, read
 pinned GitHub Release download plan, and obtain explicit approval before using
 `--apply`. Never clone the repository or install Python packages during normal
 recovery.
+
+Before the first capture or compose operation, run
+`python3 scripts/bootstrap.py onboard status` on macOS/Linux
+(`py -3 scripts/bootstrap.py onboard status` on Windows). Consume the
+secret-safe effective values and their sources. Configuration precedence is:
+explicit CLI argument, process environment, project `.env`, user
+`config.env`, then built-in default.
+
+If library, cache, or ASR configuration has not been confirmed, compose an
+onboarding plan with absolute paths and explicit options:
+
+```bash
+python3 scripts/bootstrap.py onboard \
+  --scope project \
+  --library-dir "<absolute-library-path>" \
+  --cache-dir "<absolute-cache-path>" \
+  --asr-provider whisper-cpp \
+  --asr-profile balanced
+```
+
+Show the returned `onboard_plan` and obtain explicit approval before rerunning
+with `--apply`. Applying may create directories and write project or user
+configuration. Existing differing values are preserved unless the user
+approves `--update`. Treat `onboard_done.ready=false` as a blocked setup and
+report the failed checks; do not start a capture.
+
+The project does not publish a GPU-specific whisper.cpp runtime. Never invent
+a CUDA download URL or imply that hardware detection proves backend support.
+Configure only an existing absolute `whisper-cli` path or a separately
+verified runtime whose installation the user approved.
+
+Consume `acceleration` and `ai_guidance` from bootstrap status before choosing
+an ASR path:
+
+- Treat `acceleration.hardware` only as a dependency-free hardware candidate
+  probe. It does not prove that a compatible runtime is installed.
+- If `acceleration.whisper_cpp.recommendation` is
+  `prefer_whisper_cpp_gpu`, the user did not select another provider, and
+  `doctor --asr-profile balanced` is healthy, prefer
+  `--asr-profile balanced`. The detected whisper.cpp GPU backend is enabled by
+  default; do not invent additional GPU flags.
+- If the recommendation is `offer_gpu_whisper_setup` or
+  `offer_gpu_whisper_runtime`, tell the user which hardware backend was
+  detected and offer a matching GPU-enabled whisper.cpp runtime and model.
+  Obtain approval before installing dependencies, then rerun bootstrap status
+  and doctor. Keep the configured ASR provider until the backend is verified.
+- If the probe is `unverified` or `unavailable`, keep the configured provider.
+  Do not infer GPU support merely from installed GPU hardware or a
+  `--no-gpu` help option.
+- Always obey `frame_extraction.recommendation`. The current CLI frame pipeline
+  is CPU-only even when bundled FFmpeg reports hardware acceleration methods;
+  never add unsupported FFmpeg flags.
 
 Run `<command> doctor --asr-profile <profile>` when capability state is
 unknown or after a missing-tool or missing-provider failure. Consume its
@@ -197,10 +250,25 @@ If `ffmpeg` or `yt-dlp` is missing, report the missing dependency. If ASR
 credentials or local model capability are missing, ask the user which
 configured transcription provider to use; do not silently switch providers.
 
+If the problem remains unresolved, appears to be a product defect, or required
+an undocumented workaround, offer to report it:
+
+> 这个问题可能值得反馈给维护者。要我替你收集脱敏诊断、检查重复项、起草并创建 GitHub Issue 吗？提交前我会先把完整草稿给你确认，你不需要手动填写表单。
+
+When the user accepts, read
+[issue-reporting.md](references/issue-reporting.md) and complete the workflow
+through the AI. Do not merely send the user to an empty form. Creating an Issue
+is an external write: show the sanitized title and body and obtain explicit
+confirmation immediately before submission. If no authenticated GitHub tool is
+available, return the complete ready-to-submit draft and the repository Issue
+URL instead of requesting credentials or claiming success.
+
 ## Safety
 
 - Never delete or overwrite resources without explicit user authorization.
 - Never echo API keys, cookies, or authorization headers.
+- Never attach private video content, full transcripts, cookies, API keys,
+  authorization headers, or local usernames to an Issue.
 - Do not reimplement downloading, transcription, frame extraction, summary
   generation, or note rendering in shell/Python snippets; invoke the CLI
   primitive.

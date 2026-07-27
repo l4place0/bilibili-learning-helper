@@ -40,6 +40,28 @@ OpenAI ASR client, and FFmpeg. It excludes `whisper-cli` and Whisper models.
 The bootstrap verifies the release's SHA-256 sidecar and manifest before an
 atomic user-level installation.
 
+After installing the CLI, generate a first-use configuration plan:
+
+```bash
+python3 skill/scripts/bootstrap.py onboard \
+  --scope project \
+  --library-dir "/absolute/path/video-notes" \
+  --cache-dir "/absolute/path/video-cache" \
+  --asr-provider whisper-cpp \
+  --asr-profile balanced
+# After reviewing the config file, directories, and runtime probes:
+python3 skill/scripts/bootstrap.py onboard ... --apply
+python3 skill/scripts/bootstrap.py onboard status
+```
+
+`onboard` is side-effect free unless `--apply` is present. Apply creates
+directories and atomically writes project or user configuration; it preserves
+different existing values unless `--update` is explicitly approved. Status
+reports effective value sources and credential presence without printing
+secrets. The project publishes no CUDA-specific whisper.cpp bundle, so the
+plan never invents a GPU runtime URL or treats hardware detection as loaded
+backend evidence.
+
 ## Capture and compose
 
 ```bash
@@ -69,9 +91,14 @@ All images live in the sibling `assets/` directory.
 VIDEO_SUM_LIBRARY_DIR=/absolute/path/to/video-notes
 VIDEO_SUM_CACHE_DIR=/absolute/path/to/cache
 VIDEO_SUM_MODEL_DIR=/absolute/path/to/whisper-models
+VIDEO_SUM_DEFAULT_LANGUAGE=zh
+VIDEO_SUM_DEFAULT_FRAMES=10
+VIDEO_SUM_DEFAULT_FRAME_MODE=hybrid
+VIDEO_SUM_DEFAULT_CACHE_POLICY=reuse
 ```
 
-Precedence is CLI argument > environment > `.env` > operating-system default.
+Precedence is CLI argument > environment > project `.env` > user
+`config.env` > operating-system or built-in default.
 Models are never bundled with the project or Skill.
 
 ## CLI primitives
