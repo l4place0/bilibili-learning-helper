@@ -244,6 +244,7 @@ def whisper_gpu_probe(executable: str, hardware: dict | None = None) -> dict:
             "status": "runtime_missing",
             "gpu_capable": False,
             "backend": "",
+            "loaded_backend": "",
             "evidence": (
                 ["GPU hardware candidate detected, but whisper-cli is missing"]
                 if candidate
@@ -263,6 +264,7 @@ def whisper_gpu_probe(executable: str, hardware: dict | None = None) -> dict:
             "status": "unverified",
             "gpu_capable": False,
             "backend": "",
+            "loaded_backend": "",
             "evidence": [f"probe failed: {type(exc).__name__}"],
             "recommendation": "keep_configured_asr_provider",
         }
@@ -281,6 +283,10 @@ def whisper_gpu_probe(executable: str, hardware: dict | None = None) -> dict:
         ):
             detected = name
             break
+    cpu_loaded = any(
+        "cpu" in line or "blas" in line
+        for line in backend_lines
+    )
 
     exposes_gpu_controls = bool(
         re.search(r"(?:--no-gpu|--device(?:\s|$))", output)
@@ -293,6 +299,7 @@ def whisper_gpu_probe(executable: str, hardware: dict | None = None) -> dict:
             "status": "available",
             "gpu_capable": True,
             "backend": detected,
+            "loaded_backend": detected,
             "gpu_enabled_by_default": exposes_gpu_controls,
             "evidence": evidence,
             "recommendation": "prefer_whisper_cpp_gpu",
@@ -302,6 +309,7 @@ def whisper_gpu_probe(executable: str, hardware: dict | None = None) -> dict:
             "status": "runtime_gpu_unverified",
             "gpu_capable": False,
             "backend": "",
+            "loaded_backend": "cpu" if cpu_loaded else "",
             "gpu_enabled_by_default": exposes_gpu_controls,
             "evidence": evidence,
             "recommendation": "offer_gpu_whisper_runtime",
@@ -310,6 +318,7 @@ def whisper_gpu_probe(executable: str, hardware: dict | None = None) -> dict:
         "status": "unverified" if exposes_gpu_controls else "unavailable",
         "gpu_capable": False,
         "backend": "",
+        "loaded_backend": "cpu" if cpu_loaded else "",
         "gpu_enabled_by_default": exposes_gpu_controls,
         "evidence": evidence,
         "recommendation": "keep_configured_asr_provider",
@@ -1014,6 +1023,28 @@ def asr_onboard_check(
     }
 
 
+def whisper_backend_onboard_check(
+    values: dict[str, str],
+    hardware: dict,
+) -> dict:
+    if values["ASR_PROVIDER"] != "whisper-cpp":
+        return {
+            "name": "whisper_backend",
+            "available": True,
+            "applicable": False,
+        }
+    probe = whisper_gpu_probe(
+        values.get("WHISPER_CPP_EXECUTABLE", ""),
+        hardware,
+    )
+    return {
+        "name": "whisper_backend",
+        "available": bool(probe.get("loaded_backend")),
+        "applicable": True,
+        **probe,
+    }
+
+
 def doctor_onboard_check(
     values: dict[str, str],
     install_dir: Path,
@@ -1124,6 +1155,7 @@ def onboard_payload(args: argparse.Namespace) -> dict:
         ),
         utf8_ndjson_check(),
         asr_onboard_check(effective_values, raw_effective["secrets"]),
+        whisper_backend_onboard_check(effective_values, hardware),
         doctor_onboard_check(
             effective_values,
             args.install_dir.expanduser().resolve(),

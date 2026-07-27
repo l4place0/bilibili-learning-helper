@@ -392,6 +392,7 @@ def test_whisper_gpu_probe_requires_loaded_backend():
 
     assert probe["status"] == "unverified"
     assert probe["gpu_capable"] is False
+    assert probe["loaded_backend"] == "cpu"
     assert probe["recommendation"] == "keep_configured_asr_provider"
 
 
@@ -408,6 +409,7 @@ def test_whisper_gpu_probe_recommends_detected_backend():
     assert probe["status"] == "available"
     assert probe["gpu_capable"] is True
     assert probe["backend"] == "metal"
+    assert probe["loaded_backend"] == "metal"
     assert probe["recommendation"] == "prefer_whisper_cpp_gpu"
 
 
@@ -476,7 +478,29 @@ def test_installed_cpu_runtime_with_gpu_candidate_offers_gpu_build():
         probe = bootstrap.whisper_gpu_probe("/bin/whisper-cli", hardware)
 
     assert probe["status"] == "runtime_gpu_unverified"
+    assert probe["loaded_backend"] == "cpu"
     assert probe["recommendation"] == "offer_gpu_whisper_runtime"
+
+
+def test_onboard_requires_observed_whisper_backend():
+    values = {
+        "ASR_PROVIDER": "whisper-cpp",
+        "WHISPER_CPP_EXECUTABLE": "/bin/whisper-cli",
+    }
+    hardware = {"candidate": True, "devices": []}
+    with patch.object(
+        bootstrap,
+        "whisper_gpu_probe",
+        return_value={
+            "status": "runtime_gpu_unverified",
+            "loaded_backend": "cpu",
+            "recommendation": "offer_gpu_whisper_runtime",
+        },
+    ):
+        check = bootstrap.whisper_backend_onboard_check(values, hardware)
+
+    assert check["available"] is True
+    assert check["loaded_backend"] == "cpu"
 
 
 def test_ffmpeg_probe_does_not_claim_supported_frame_path():
