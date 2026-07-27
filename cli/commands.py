@@ -489,10 +489,14 @@ def capture(
     """Capture transcript and frames without invoking an internal LLM."""
     from core.config import settings
 
-    selected_profile = asr_profile or (
-        settings.asr_profile
-        if not asr_provider and settings.asr_provider == "whisper-cpp"
-        else ""
+    selected_profile = (
+        asr_profile
+        or (
+            settings.asr_profile
+            if not asr_provider and settings.asr_provider == "whisper-cpp"
+            else ""
+        )
+        or ""
     )
     _run_ingestion(
         url,

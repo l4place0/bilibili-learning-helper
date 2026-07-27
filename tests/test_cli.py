@@ -138,6 +138,24 @@ def test_capture_uses_configured_defaults():
     }
 
 
+def test_capture_does_not_require_profile_before_onboarding():
+    from cli import main
+    from core.config import settings
+
+    with (
+        patch.object(settings, "asr_provider", "whisper-cpp"),
+        patch.object(settings, "asr_profile", None),
+        patch("cli.commands._run_ingestion") as run_ingestion,
+    ):
+        result = CliRunner().invoke(
+            main,
+            ["capture", "https://example.com/video"],
+        )
+
+    assert result.exit_code == 0
+    assert run_ingestion.call_args.args[3] == ""
+
+
 def test_asr_profiles_reports_installed_models(tmp_path):
     from cli import main
     from core.config import settings

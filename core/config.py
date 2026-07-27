@@ -19,7 +19,9 @@ def project_config_file(project_dir: Path | None = None) -> Path:
 class Settings(BaseSettings):
     # ASR
     asr_provider: Literal["whisper-cpp", "local", "openai"] = "whisper-cpp"
-    asr_profile: Literal["fast", "balanced", "accurate"] = "balanced"
+    # None preserves the pre-onboarding whisper_cpp_model behavior. Onboarding
+    # writes an explicit profile, which capture then applies.
+    asr_profile: Literal["fast", "balanced", "accurate"] | None = None
     asr_endpoint: str = ""           # http://gpu-server:8001 (for local)
     asr_api_key: str = ""            # API key (for openai cloud)
     asr_model: str = "whisper-1"     # cloud model name
