@@ -16,6 +16,50 @@
   → 单份 Markdown 笔记 + 同级 assets/
 ```
 
+## 项目架构
+
+```mermaid
+flowchart TD
+    U["用户提供视频链接与学习目标"] --> S["Codex / 宿主 AI 加载 Skill"]
+
+    subgraph INSTALL["安装与运行时"]
+        S --> B["bootstrap.py status / install"]
+        B --> R["GitHub Release<br/>平台 ZIP + manifest + SHA-256"]
+        R --> C["用户级 video-sum 独立 CLI"]
+    end
+
+    subgraph CAPTURE["确定性采集层"]
+        C --> P["Platform Adapters<br/>Bilibili / YouTube"]
+        P --> M["媒体与元数据"]
+        M --> A["ASR Providers<br/>whisper.cpp / OpenAI / Local HTTP"]
+        M --> V["Vision<br/>Hybrid 候选帧与定点补帧"]
+        M <--> K["用户级分层缓存<br/>media / audio / transcript / frames"]
+        A <--> K
+        V <--> K
+        A --> RAW["原始时间戳转写稿"]
+        V --> FRAMES["候选关键帧"]
+    end
+
+    subgraph HOST["宿主 AI 分析层"]
+        RAW --> T["术语增强与纠错映射"]
+        FRAMES --> VS["实际视觉检查与语义选帧"]
+        T --> SY["总结与辅助理解"]
+        VS --> SY
+        SY --> MM["Mermaid 图与帧占位符"]
+    end
+
+    subgraph LIBRARY["持久资源库"]
+        MM --> COMPOSE["video-sum resource compose"]
+        T --> COMPOSE
+        COMPOSE --> NOTE["单份 Markdown<br/>总结稿 / 辅助理解 / Data"]
+        COMPOSE --> ASSETS["同级 assets/<br/>manifest + 关键帧"]
+    end
+```
+
+Skill 和宿主 AI 负责任务理解与内容判断；CLI 负责下载、转写、抽帧、缓存和
+原子写入等可重复操作。缓存只保存可再生的中间产物，最终资源库只保留可搬移
+的单笔记与同级 `assets/`。
+
 支持 Bilibili 与 YouTube、中文/英文/日文转写、用户级分层缓存，以及三种
 ASR 方式：
 
