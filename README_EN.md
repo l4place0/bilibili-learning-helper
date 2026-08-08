@@ -1,82 +1,65 @@
-# Bilibili Learning Helper
+# Bili Tutor CLI
 
-English | [中文](README.md)
+[中文](README.md) | English
 
-A Skill-driven, local-first video learning library. The CLI exposes
-deterministic primitives; the host AI interprets intent, improves terminology,
-selects frames, and writes summaries and Mermaid diagrams.
+A deterministic CLI for local video-learning workflows. It owns downloading,
+transcription, candidate-frame extraction, caching, and atomic note writes.
+Intent interpretation, terminology enhancement, visual selection, summaries,
+and Mermaid diagrams belong to the host AI through the separate
+[bili-tutor-skill](https://github.com/l4place0/bili-tutor-skill).
 
 ## Core workflow
 
 ```text
-Video URL
-  -> video-sum capture
-  -> raw transcript + frame candidates
-  -> Host AI / Skill
-  -> video-sum resource compose
-  -> one Markdown note + sibling assets/
+video URL
+  → video-sum capture
+  → raw transcript + candidate frames
+  → host AI analysis
+  → video-sum resource compose
+  → one Markdown note + sibling assets/
 ```
 
-The core supports Bilibili and YouTube, Chinese/English/Japanese
-transcription, a user-level artifact cache, direct `whisper.cpp`, the OpenAI
-transcription API, and a generic local HTTP ASR endpoint.
+The CLI supports Bilibili and YouTube, Chinese/English/Japanese transcription,
+layered user-level caching, local whisper.cpp, OpenAI transcription, and a
+compatible HTTP transcription service. Whisper models and `whisper-cli` are
+not included in release bundles.
 
-## Skill installation
+## Installation
 
-Normal Skill use does not clone the repository, create a virtual environment,
-or install Python packages. The bootstrap uses the host's Python to select a
-pinned platform-specific GitHub Release; the installed CLI does not depend on
-the host Python:
+For end users, install
+[bili-tutor-skill](https://github.com/l4place0/bili-tutor-skill). Its thin
+bootstrap downloads a platform-specific standalone bundle from this
+repository's GitHub Releases:
+
+```text
+bili-tutor-cli-<version>-<platform>-<arch>.zip
+├── video-sum[.exe]
+└── manifest.json
+```
+
+For source development:
 
 ```bash
-python3 skill/scripts/bootstrap.py status
-python3 skill/scripts/bootstrap.py install
-# After reviewing the version, URLs, checksum, and destination:
-python3 skill/scripts/bootstrap.py install --apply
+git clone https://github.com/l4place0/bili-tutor-cli.git
+cd bili-tutor-cli
+uv sync --extra dev
+uv run video-sum --help
 ```
 
-Each bundle contains the Python runtime, Python dependencies, yt-dlp, the
-OpenAI ASR client, and FFmpeg. It excludes `whisper-cli` and Whisper models.
-The bootstrap verifies the release's SHA-256 sidecar and manifest before an
-atomic user-level installation.
-
-After installing the CLI, generate a first-use configuration plan:
+## CLI primitives
 
 ```bash
-python3 skill/scripts/bootstrap.py onboard \
-  --scope project \
-  --library-dir "/absolute/path/video-notes" \
-  --cache-dir "/absolute/path/video-cache" \
-  --asr-provider whisper-cpp \
-  --asr-profile balanced
-# After reviewing the config file, directories, and runtime probes:
-python3 skill/scripts/bootstrap.py onboard ... --apply
-python3 skill/scripts/bootstrap.py onboard status
+video-sum doctor
+video-sum capture "<URL>" --frame-mode hybrid --cache reuse --frames 10
+video-sum resource compose "<resource_id>" ...
+video-sum library list|show|search
+video-sum cache dir|status|list|inspect|prune|clear
+video-sum frames extract "<video-file>" --at 12:30 --around 2
+video-sum asr profiles
 ```
 
-`onboard` is side-effect free unless `--apply` is present. Apply creates
-directories and atomically writes project or user configuration; it preserves
-different existing values unless `--update` is explicitly approved. Status
-reports effective value sources and credential presence without printing
-secrets. The project publishes no CUDA-specific whisper.cpp bundle, so the
-plan never invents a GPU runtime URL or treats hardware detection as loaded
-backend evidence.
-
-## Capture and compose
-
-```bash
-uv run video-sum doctor --asr-profile balanced
-uv run video-sum capture "https://www.bilibili.com/video/BVxxxxx/" \
-  --asr-profile balanced \
-  --frame-mode hybrid \
-  --cache reuse \
-  --fact-check auto \
-  --frames 10
-```
-
-The Skill then asks the host AI to enhance the transcript and visual
-explanation before invoking `video-sum resource compose`. Each resource is one
-Markdown file with these level-one sections:
+`capture` creates reusable raw artifacts. After the host AI processes them,
+`resource compose` atomically saves one Markdown note with these H1 sections:
 
 ```markdown
 # 总结稿
@@ -84,22 +67,14 @@ Markdown file with these level-one sections:
 # Data
 ```
 
-All images live in the sibling `assets/` directory.
+Images live in a sibling `assets/` directory; no per-video directory is made.
 
-External fact-checking supports `off`, `auto`, `important`, `all`, and
-`required`. The host AI checks only timestamped objective or time-sensitive
-claims, prefers clickable primary sources, and never treats search snippets as
-evidence. If safe verification is unavailable, the note records a fixed skip
-reason and clearly labels the relevant text as an unverified video statement.
-Skipping remains non-blocking except in `required` mode. Pass structured results
-to `resource compose` with `--fact-check-file fact-check.json`.
-
-## Paths
+## Paths and configuration
 
 ```dotenv
-VIDEO_SUM_LIBRARY_DIR=/absolute/path/to/video-notes
-VIDEO_SUM_CACHE_DIR=/absolute/path/to/cache
-VIDEO_SUM_MODEL_DIR=/absolute/path/to/whisper-models
+VIDEO_SUM_LIBRARY_DIR=/Users/you/Documents/video-notes
+VIDEO_SUM_CACHE_DIR=/Users/you/Library/Caches/video-sum
+VIDEO_SUM_MODEL_DIR=/Users/you/Library/Application Support/video-sum/models
 VIDEO_SUM_DEFAULT_LANGUAGE=zh
 VIDEO_SUM_DEFAULT_FRAMES=10
 VIDEO_SUM_DEFAULT_FRAME_MODE=hybrid
@@ -108,53 +83,24 @@ VIDEO_SUM_FACT_CHECK=auto
 VIDEO_SUM_FACT_CHECK_SOURCE_POLICY=primary-first
 ```
 
-Precedence is CLI argument > environment > project `.env` > user
-`config.env` > operating-system or built-in default.
-Models are never bundled with the project or Skill.
+Precedence is CLI arguments > environment > project `.env` > user
+`config.env` > OS/built-in defaults. Selected frames are copied into `assets/`
+and manifests store stable cache keys rather than absolute cache paths.
 
-## CLI primitives
-
-```bash
-video-sum doctor
-video-sum capture "<URL>"
-video-sum resource compose "<resource_id>" ...
-video-sum library list|show|search
-video-sum cache dir|status|list|inspect|prune|clear
-video-sum frames extract "<video-file>" --at 12:30 --around 2
-video-sum asr profiles
-```
-
-## Skill package
-
-```text
-skill/
-├── SKILL.md
-├── agents/openai.yaml
-├── references/environment-recovery.md
-└── scripts/bootstrap.py
-```
-
-`bootstrap.py status` returns the exact executable in `command`.
-`bootstrap.py install` produces a pinned download plan; adding `--apply`
-downloads, verifies, and installs it.
-
-## Development
+## Development and releases
 
 ```bash
-git clone https://github.com/l4place0/bilibili-learning-helper.git
-cd bilibili-learning-helper
 uv sync --extra dev
 uv run ruff check .
 uv run pytest
 uv sync --extra standalone
 uv run python scripts/build_standalone.py \
-  --target darwin-arm64 --version 0.2.0
+  --target darwin-arm64 --version 0.2.1
 ```
 
-Pushing a `v*` tag runs the five-platform release workflow and publishes each
-bundle with its `.sha256` sidecar.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module boundaries.
+Tags matching `v*` trigger GitHub Actions to build five platform bundles plus
+SHA-256 sidecars. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the
+boundary model.
 
 ## License
 

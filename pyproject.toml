@@ -1,6 +1,6 @@
 [project]
-name = "bilibili-learning-helper"
-version = "0.2.0"
+name = "bili-tutor-cli"
+version = "0.2.1"
 description = "CLI primitives for capturing video transcripts and key frames into a local learning library"
 requires-python = ">=3.10"
 dependencies = [

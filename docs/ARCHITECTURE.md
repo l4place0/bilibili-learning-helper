@@ -1,9 +1,10 @@
 # Architecture
 
-The project is a local-first CLI with a Skill as its primary interaction layer.
-The CLI exposes deterministic operation primitives; the host AI interprets user
-intent, enhances transcripts, selects frames, creates Mermaid diagrams, and
-assembles the final note.
+This repository contains the local-first CLI only. It exposes deterministic
+operation primitives. The separately versioned
+[`bili-tutor-skill`](https://github.com/l4place0/bili-tutor-skill) lets a host
+AI interpret intent, enhance transcripts, select frames, create Mermaid
+diagrams, and assemble the final note.
 
 ## Core path
 
@@ -19,7 +20,7 @@ video-sum capture
    +-- hybrid frame candidates
    |
    v
-Host AI + Skill
+Host AI + external bili-tutor-skill
    |
    +-- transcript terminology enhancement
    +-- summary and Mermaid composition
@@ -44,7 +45,7 @@ v* tag
   -> PyInstaller standalone CLI per OS/architecture
   -> zip + manifest + SHA-256 sidecar
   -> GitHub Release
-  -> Skill bootstrap download and atomic user-level install
+  -> bili-tutor-skill bootstrap download and atomic user-level install
 ```
 
 The standalone bundle includes Python, Python dependencies, yt-dlp, the OpenAI
@@ -70,7 +71,7 @@ Whisper models and `whisper-cli` remain optional external local-ASR assets.
 - Media, audio, transcripts, and candidate frames use the OS user cache
   directory through `platformdirs`.
 - Whisper models use the OS user data directory and are never bundled with the
-  Skill.
+  CLI release.
 - The resource library is user-selected and contains only durable notes/assets.
 - `VIDEO_SUM_CACHE_DIR`, `VIDEO_SUM_MODEL_DIR`, and
   `VIDEO_SUM_LIBRARY_DIR` provide explicit overrides.

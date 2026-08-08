@@ -1,7 +1,7 @@
 ---
 protocol: engineering-loop
 version: 1
-repository: l4place0/bilibili-learning-helper
+repository: l4place0/bili-tutor-cli
 state_file: docs/automation/state.json
 controller: docs/automation/loopctl.py
 ---
@@ -53,8 +53,6 @@ release:
     - pyproject.toml
     - uv.lock
     - cli/__init__.py
-    - skill/scripts/bootstrap.py
-    - skill/references/environment-recovery.md
   targets:
     - darwin-arm64
     - darwin-x64
@@ -157,7 +155,7 @@ python3 docs/automation/loopctl.py validate
 
 python3 docs/automation/loopctl.py run start \
   --operation issue \
-  --repository l4place0/bilibili-learning-helper \
+  --repository l4place0/bili-tutor-cli \
   --issue 3 \
   --base-sha 7352e81 \
   --allow code_changes \

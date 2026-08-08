@@ -67,11 +67,11 @@ def build(target: str, version: str, output_dir: Path) -> tuple[Path, Path]:
     run([str(executable), "--version"])
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    asset_name = f"video-sum-{version}-{target}.zip"
+    asset_name = f"bili-tutor-cli-{version}-{target}.zip"
     asset = output_dir / asset_name
     manifest = {
         "schema_version": 1,
-        "name": "video-sum",
+        "name": "bili-tutor-cli",
         "version": version,
         "target": target,
         "executable": executable_name,

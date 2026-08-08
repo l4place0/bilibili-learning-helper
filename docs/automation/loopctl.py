@@ -63,7 +63,6 @@ CHECK_KINDS = {
     "local_tests",
     "lint",
     "diff_check",
-    "skill_validation",
     "ci",
     "version_consistency",
     "asset_inventory",
