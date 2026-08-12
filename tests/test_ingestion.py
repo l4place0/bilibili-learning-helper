@@ -307,6 +307,46 @@ def test_note_injects_mermaid_and_selected_frame(tmp_path):
     assert not (tmp_path / "library" / "assets" / "bilibili-BV1visual").exists()
 
 
+def test_compose_copies_and_links_supplemental_data_assets(tmp_path):
+    library = FilesystemLibrary(tmp_path / "library")
+    captured = library.save(
+        platform="bilibili",
+        video_id="BV1audience",
+        source_url="https://example.test/video",
+        metadata={"title": "观众材料样本"},
+        summary="",
+        understanding="",
+        transcript="[00:00] 原始转写",
+        transcript_segments=[],
+        frames=[],
+        providers={"asr": "test", "llm": "host"},
+    )
+    comments = tmp_path / "comments.jsonl"
+    comments.write_text('{"record_type":"comment"}\n', encoding="utf-8")
+
+    composed = library.compose(
+        captured.resource_id,
+        summary="总结内容",
+        understanding='```mermaid\nflowchart TD\n  A["视频"] --> B["讨论"]\n```',
+        data_assets=[comments],
+    )
+
+    expected = (
+        tmp_path
+        / "library"
+        / "assets"
+        / "bilibili-BV1audience-comments.jsonl"
+    )
+    manifest = json.loads(composed.manifest_path.read_text(encoding="utf-8"))
+    note = composed.note_path.read_text(encoding="utf-8")
+    assert expected.read_text(encoding="utf-8") == comments.read_text(encoding="utf-8")
+    assert manifest["artifacts"]["data"] == [
+        "assets/bilibili-BV1audience-comments.jsonl"
+    ]
+    assert "## 补充原始数据" in note
+    assert "assets/bilibili-BV1audience-comments.jsonl" in note
+
+
 def test_compose_adds_completed_fact_check_to_note_and_manifest(tmp_path):
     library = FilesystemLibrary(tmp_path / "library")
     captured = library.save(

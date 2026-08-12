@@ -20,7 +20,9 @@ _UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MULTIPLE_SPACE = re.compile(r"\s+")
 
 
-def safe_filename(value: str, fallback: str = "video-note", max_length: int = 120) -> str:
+def safe_filename(
+    value: str, fallback: str = "video-note", max_length: int = 120
+) -> str:
     """Return a portable filename without changing the human-readable title."""
     cleaned = _UNSAFE_FILENAME.sub("_", value)
     cleaned = _MULTIPLE_SPACE.sub(" ", cleaned).strip(" .")
@@ -48,9 +50,7 @@ def _stage_text_in_target_directory(target: Path, content: str) -> Path:
         except BaseException:
             staged.unlink(missing_ok=True)
             raise
-    raise RuntimeError(
-        f"Could not allocate a temporary file beside target: {target}"
-    )
+    raise RuntimeError(f"Could not allocate a temporary file beside target: {target}")
 
 
 @dataclass(frozen=True)
@@ -60,19 +60,21 @@ class ResourceRecord:
     manifest_path: Path
     frame_paths: list[Path]
     metadata: dict[str, Any]
+    data_asset_paths: list[Path] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["note_path"] = str(self.note_path)
         data["manifest_path"] = str(self.manifest_path)
         data["frame_paths"] = [str(path) for path in self.frame_paths]
+        data["data_asset_paths"] = [str(path) for path in (self.data_asset_paths or [])]
         return data
 
 
 class FilesystemLibrary:
     """Write one portable Markdown note plus relative assets into a directory."""
 
-    schema_version = 2
+    schema_version = 3
 
     def __init__(self, root: Path):
         self.root = root.expanduser().resolve()
@@ -93,7 +95,9 @@ class FilesystemLibrary:
             note_name = (manifest.get("artifacts") or {}).get("note", "")
             resources.append(
                 {
-                    "resource_id": manifest.get("resource_id", manifest_path.parent.name),
+                    "resource_id": manifest.get(
+                        "resource_id", manifest_path.parent.name
+                    ),
                     "title": manifest.get("title", ""),
                     "source": manifest.get("source", {}),
                     "updated_at": manifest.get("updated_at", ""),
@@ -113,9 +117,7 @@ class FilesystemLibrary:
             raise ValueError("Invalid resource_id")
         manifest_path = self.root / "assets" / f"{resource_id}.json"
         if not manifest_path.is_file():
-            legacy_path = (
-                self.root / "assets" / resource_id / "resource.json"
-            )
+            legacy_path = self.root / "assets" / resource_id / "resource.json"
             if legacy_path.is_file():
                 manifest_path = legacy_path
         if not manifest_path.is_file():
@@ -160,6 +162,7 @@ class FilesystemLibrary:
         corrections: list[dict[str, Any]] | None = None,
         fact_check: dict[str, Any] | None = None,
         fact_check_mode: str | None = None,
+        data_assets: list[Path] | None = None,
     ) -> ResourceRecord:
         """Compose a captured resource using host-AI authored content."""
         if not summary.strip():
@@ -196,13 +199,38 @@ class FilesystemLibrary:
             note_path.read_text(encoding="utf-8")
         )
         artifacts = manifest.get("artifacts") or {}
-        relative_frames = [
-            Path(path) for path in artifacts.get("frames") or []
-        ]
+        relative_frames = [Path(path) for path in artifacts.get("frames") or []]
         for relative_frame in relative_frames:
             if not (self.root / relative_frame).is_file():
                 raise FileNotFoundError(
                     f"Resource frame not found: {self.root / relative_frame}"
+                )
+
+        asset_root = self.root / "assets"
+        relative_data_assets = [Path(path) for path in artifacts.get("data") or []]
+        new_data_assets: dict[Path, Path] = {}
+        for source_path in data_assets or []:
+            source_path = source_path.expanduser().resolve()
+            if not source_path.is_file():
+                raise FileNotFoundError(f"Data asset not found: {source_path}")
+            target_name = f"{resource_id}-{safe_filename(source_path.name)}"
+            relative_target = Path("assets") / target_name
+            if (
+                relative_target in new_data_assets
+                and new_data_assets[relative_target] != source_path
+            ):
+                raise ValueError(f"Duplicate data asset name: {source_path.name}")
+            new_data_assets[relative_target] = source_path
+        if new_data_assets:
+            relative_data_assets = [
+                path for path in relative_data_assets if path not in new_data_assets
+            ] + list(new_data_assets)
+        for relative_asset in relative_data_assets:
+            if relative_asset in new_data_assets:
+                continue
+            if not (self.root / relative_asset).is_file():
+                raise FileNotFoundError(
+                    f"Resource data asset not found: {self.root / relative_asset}"
                 )
 
         source = manifest.get("source") or {}
@@ -218,23 +246,37 @@ class FilesystemLibrary:
             corrected_transcript=corrected_transcript,
             transcript=raw_transcript,
             relative_frames=relative_frames,
+            relative_data_assets=relative_data_assets,
             fact_check=normalized_fact_check,
         )
 
         staged_note: Path | None = None
         staged_manifest: Path | None = None
+        staged_data_assets: list[tuple[Path, Path]] = []
         try:
             manifest["schema_version"] = self.schema_version
             manifest["providers"] = dict(manifest.get("providers") or {})
             manifest["providers"]["llm"] = "host"
             manifest["corrections"] = corrections or []
             manifest["fact_check"] = normalized_fact_check
+            manifest.setdefault("artifacts", {})["data"] = [
+                path.as_posix() for path in relative_data_assets
+            ]
             manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+            asset_root.mkdir(parents=True, exist_ok=True)
+            for relative_target, source_path in new_data_assets.items():
+                target = self.root / relative_target
+                staged = target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
+                shutil.copy2(source_path, staged)
+                staged_data_assets.append((staged, target))
             staged_note = _stage_text_in_target_directory(note_path, note_text)
             staged_manifest = _stage_text_in_target_directory(
                 manifest_path,
                 json.dumps(manifest, ensure_ascii=False, indent=2),
             )
+            for staged, target in staged_data_assets:
+                os.replace(staged, target)
+            staged_data_assets = []
             os.replace(staged_manifest, manifest_path)
             staged_manifest = None
             os.replace(staged_note, note_path)
@@ -243,6 +285,8 @@ class FilesystemLibrary:
             for staged in (staged_manifest, staged_note):
                 if staged is not None:
                     staged.unlink(missing_ok=True)
+            for staged, _target in staged_data_assets:
+                staged.unlink(missing_ok=True)
 
         return ResourceRecord(
             resource_id=resource_id,
@@ -250,6 +294,7 @@ class FilesystemLibrary:
             manifest_path=manifest_path,
             frame_paths=[self.root / path for path in relative_frames],
             metadata=metadata,
+            data_asset_paths=[self.root / path for path in relative_data_assets],
         )
 
     def save(
@@ -308,6 +353,7 @@ class FilesystemLibrary:
                 corrected_transcript="",
                 transcript=transcript,
                 relative_frames=relative_frames,
+                relative_data_assets=[],
                 fact_check=None,
             )
             staged_note = stage_dir / note_name
@@ -330,6 +376,7 @@ class FilesystemLibrary:
                 "artifacts": {
                     "note": note_name,
                     "frames": [path.as_posix() for path in relative_frames],
+                    "data": [],
                 },
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -355,6 +402,7 @@ class FilesystemLibrary:
                 manifest_path=manifest_path,
                 frame_paths=[self.root / path for path in relative_frames],
                 metadata=metadata,
+                data_asset_paths=[],
             )
         finally:
             shutil.rmtree(stage_dir, ignore_errors=True)
@@ -376,6 +424,7 @@ class FilesystemLibrary:
         corrected_transcript: str,
         transcript: str,
         relative_frames: list[Path],
+        relative_data_assets: list[Path],
         fact_check: dict[str, Any] | None,
     ) -> str:
         tags = metadata.get("tags") or []
@@ -446,6 +495,11 @@ class FilesystemLibrary:
         else:
             lines.append("未提取到关键帧。")
             lines.append("")
+        if relative_data_assets:
+            lines.extend(["## 补充原始数据", ""])
+            for asset in relative_data_assets:
+                lines.append(f"- [{asset.name}]({asset.as_posix()})")
+            lines.append("")
         return "\n".join(lines)
 
     @staticmethod
@@ -463,9 +517,7 @@ class FilesystemLibrary:
         def replace(match: re.Match) -> str:
             index = int(match.group(1))
             if index < 1 or index > len(relative_frames):
-                raise ValueError(
-                    f"Understanding references unavailable frame: {index}"
-                )
+                raise ValueError(f"Understanding references unavailable frame: {index}")
             frame = relative_frames[index - 1]
             return f"![关键帧 {index}]({frame.as_posix()})"
 

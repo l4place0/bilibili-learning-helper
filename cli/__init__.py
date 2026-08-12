@@ -4,7 +4,7 @@ import click
 
 
 @click.group()
-@click.version_option(version="0.2.1")
+@click.version_option(version="0.3.0")
 def main():
     """Video Summarizer CLI — structured JSON output for skill integration."""
     pass
@@ -14,6 +14,8 @@ from cli.commands import (  # noqa: E402
     asr_commands,
     capture,
     cache_commands,
+    comment_commands,
+    danmaku_commands,
     doctor,
     frame_commands,
     library_commands,
@@ -23,6 +25,8 @@ from cli.commands import (  # noqa: E402
 main.add_command(asr_commands)
 main.add_command(capture)
 main.add_command(cache_commands)
+main.add_command(comment_commands)
+main.add_command(danmaku_commands)
 main.add_command(doctor)
 main.add_command(frame_commands)
 main.add_command(library_commands)

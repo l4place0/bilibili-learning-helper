@@ -12,7 +12,10 @@ import click
 from cli.output import emit, emit_error
 
 # Redirect all logging to stderr so stdout stays clean JSON
-logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.basicConfig(
+    stream=sys.stderr, level=logging.INFO, format="%(levelname)s: %(message)s"
+)
+
 
 def _run_ingestion(
     url: str,
@@ -145,10 +148,7 @@ def doctor(asr_provider, asr_profile):
             "asr",
             bool(executable and model_exists),
             True,
-            (
-                f"whisper-cpp executable={executable or 'missing'}, "
-                f"model={model_path}"
-            ),
+            (f"whisper-cpp executable={executable or 'missing'}, model={model_path}"),
         )
     elif asr_provider == "openai":
         add("asr", bool(settings.asr_api_key), True, "openai API configuration")
@@ -187,6 +187,213 @@ def frame_commands():
 @click.group(name="cache")
 def cache_commands():
     """Inspect and maintain the user-level content cache."""
+
+
+@click.group(name="comments")
+def comment_commands():
+    """Fetch and rank public top-level video comments."""
+
+
+@click.group(name="danmaku")
+def danmaku_commands():
+    """Fetch and pre-analyze current Bilibili danmaku."""
+
+
+@comment_commands.command(name="fetch")
+@click.argument("url")
+@click.option("--mode", type=click.Choice(["hot", "all"]), default="hot")
+@click.option(
+    "--limit",
+    type=click.IntRange(0),
+    default=None,
+    help="Maximum top-level comments; 0 means unlimited in all mode",
+)
+@click.option(
+    "--output",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+)
+@click.option("--force", is_flag=True, help="Replace an existing output file")
+def comments_fetch(url, mode, limit, output, force):
+    """Fetch hot or all accessible top-level Bilibili comments."""
+    from core.community import BilibiliCommunityClient, write_jsonl
+    from core.config import settings
+
+    if output.exists() and not force:
+        emit_error(
+            f"Output already exists: {output}",
+            code=3,
+            error_code="output_exists",
+        )
+    selected_limit = (50 if mode == "hot" else 0) if limit is None else limit
+    if mode == "hot" and selected_limit == 0:
+        emit_error(
+            "hot mode requires a positive --limit",
+            code=2,
+            error_code="invalid_input",
+        )
+    try:
+        with BilibiliCommunityClient(settings.cookies_path) as client:
+            metadata, comments = client.fetch_comments(
+                url,
+                mode=mode,
+                limit=selected_limit,
+                progress=lambda count, total: emit(
+                    "stage",
+                    stage="comments",
+                    progress=count,
+                    message=f"Fetched {count} of {total or 'unknown'} comments",
+                ),
+            )
+        write_jsonl(output, [metadata, *comments])
+    except (OSError, RuntimeError, ValueError) as exc:
+        emit_error(str(exc), code=1, error_code="comments_fetch_failed")
+    emit(
+        "comments_fetched",
+        output=str(output.expanduser().resolve()),
+        count=len(comments),
+        mode=mode,
+        authenticated=metadata["authenticated"],
+        nested_replies_included=False,
+        warning=(
+            "All mode may be slow and may trigger platform rate limits."
+            if mode == "all"
+            else ""
+        ),
+    )
+
+
+@comment_commands.command(name="select")
+@click.argument(
+    "comments_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option("--limit", default=20, type=click.IntRange(1, 200))
+@click.option(
+    "--output",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+)
+@click.option("--force", is_flag=True, help="Replace an existing output file")
+def comments_select(comments_file, limit, output, force):
+    """Rank comment candidates for host-AI quality review."""
+    from core.community import read_jsonl, select_comment_candidates, write_json
+
+    if output.exists() and not force:
+        emit_error(
+            f"Output already exists: {output}",
+            code=3,
+            error_code="output_exists",
+        )
+    try:
+        metadata, comments = read_jsonl(comments_file, "comment")
+        result = select_comment_candidates(metadata, comments, limit)
+        write_json(output, result)
+    except (OSError, ValueError) as exc:
+        emit_error(str(exc), code=2, error_code="comments_select_failed")
+    emit(
+        "comment_candidates_selected",
+        output=str(output.expanduser().resolve()),
+        count=result["candidate_count"],
+        host_ai_review_required=True,
+    )
+
+
+@danmaku_commands.command(name="fetch")
+@click.argument("url")
+@click.option(
+    "--output",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+)
+@click.option("--force", is_flag=True, help="Replace an existing output file")
+def danmaku_fetch(url, output, force):
+    """Fetch the currently accessible Bilibili danmaku segments."""
+    from core.community import BilibiliCommunityClient, write_jsonl
+    from core.config import settings
+
+    if output.exists() and not force:
+        emit_error(
+            f"Output already exists: {output}",
+            code=3,
+            error_code="output_exists",
+        )
+    try:
+        with BilibiliCommunityClient(settings.cookies_path) as client:
+            metadata, records = client.fetch_danmaku(
+                url,
+                progress=lambda current, total: emit(
+                    "stage",
+                    stage="danmaku",
+                    progress=round(current / total * 100),
+                    message=f"Fetched danmaku segment {current}/{total}",
+                ),
+            )
+        write_jsonl(output, [metadata, *records])
+    except (OSError, RuntimeError, ValueError) as exc:
+        emit_error(str(exc), code=1, error_code="danmaku_fetch_failed")
+    emit(
+        "danmaku_fetched",
+        output=str(output.expanduser().resolve()),
+        count=len(records),
+        source=metadata["source"],
+        scope=metadata["scope"],
+        authenticated=metadata["authenticated"],
+        complete_historical=False,
+    )
+
+
+@danmaku_commands.command(name="analyze")
+@click.argument(
+    "danmaku_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option("--bucket-seconds", default=30, type=click.IntRange(5, 600))
+@click.option("--hotspots", "hotspot_limit", default=10, type=click.IntRange(1, 100))
+@click.option("--clusters", "cluster_limit", default=30, type=click.IntRange(1, 500))
+@click.option(
+    "--output",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+)
+@click.option("--force", is_flag=True, help="Replace an existing output file")
+def danmaku_analyze(
+    danmaku_file,
+    bucket_seconds,
+    hotspot_limit,
+    cluster_limit,
+    output,
+    force,
+):
+    """Create deterministic hotspot and semantic-analysis candidates."""
+    from core.community import analyze_danmaku, read_jsonl, write_json
+
+    if output.exists() and not force:
+        emit_error(
+            f"Output already exists: {output}",
+            code=3,
+            error_code="output_exists",
+        )
+    try:
+        metadata, records = read_jsonl(danmaku_file, "danmaku")
+        result = analyze_danmaku(
+            metadata,
+            records,
+            bucket_seconds=bucket_seconds,
+            hotspot_limit=hotspot_limit,
+            cluster_limit=cluster_limit,
+        )
+        write_json(output, result)
+    except (OSError, ValueError) as exc:
+        emit_error(str(exc), code=2, error_code="danmaku_analysis_failed")
+    emit(
+        "danmaku_analyzed",
+        output=str(output.expanduser().resolve()),
+        record_count=result["record_count"],
+        hotspot_count=len(result["hotspots"]),
+        cluster_count=len(result["repetition_clusters"]),
+        host_ai_review_required=True,
+    )
 
 
 def _cache_store():
@@ -326,6 +533,13 @@ def extract_targeted_frames(video, timestamps, around, output_dir):
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
 @click.option(
+    "--data-asset",
+    "data_assets",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Raw supplemental file to copy into sibling assets/; repeat as needed",
+)
+@click.option(
     "--fact-check",
     "fact_check_mode",
     default=None,
@@ -340,6 +554,7 @@ def resource_compose(
     corrected_transcript_file,
     corrections_file,
     fact_check_file,
+    data_assets,
     fact_check_mode,
     output_dir,
 ):
@@ -383,12 +598,11 @@ def resource_compose(
             resource_id,
             summary=str(content.get("summary") or ""),
             understanding=str(content.get("understanding") or ""),
-            corrected_transcript=str(
-                content.get("corrected_transcript") or ""
-            ),
+            corrected_transcript=str(content.get("corrected_transcript") or ""),
             corrections=content.get("corrections") or [],
             fact_check=content.get("fact_check"),
             fact_check_mode=fact_check_mode,
+            data_assets=list(data_assets),
         )
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
         emit_error(str(exc), code=2, error_code="invalid_content")

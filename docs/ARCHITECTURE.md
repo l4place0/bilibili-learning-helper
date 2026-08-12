@@ -18,6 +18,7 @@ video-sum capture
    +-- user-level media cache
    +-- selected ASR provider
    +-- hybrid frame candidates
+   +-- optional top-level comments / current danmaku
    |
    v
 Host AI + external bili-tutor-skill
@@ -63,6 +64,7 @@ Whisper models and `whisper-cli` remain optional external local-ASR assets.
 | ASR | `core/asr/` | OpenAI API, generic local HTTP, and direct whisper.cpp providers |
 | Vision | `core/vision/frames.py` | Hybrid scene/timestamp sampling and targeted extraction |
 | Platforms | `core/platforms/` | Bilibili and YouTube URL/download adapters |
+| Community | `core/community.py` | Bilibili comments, current danmaku, and deterministic analysis candidates |
 | Runtime | `core/runtime.py` | Bundled/system FFmpeg resolution |
 | Release | `scripts/build_standalone.py`, `.github/workflows/release.yml` | Cross-platform bundle production |
 

@@ -11,7 +11,7 @@
 ```text
 视频链接
   → video-sum capture
-  → 原始转写稿 + 候选关键帧
+  → 原始转写稿 + 候选关键帧 + 可选评论/弹幕材料
   → 宿主 AI 分析
   → video-sum resource compose
   → 单份 Markdown 笔记 + 同级 assets/
@@ -53,6 +53,10 @@ video-sum library list|show|search
 video-sum cache dir|status|list|inspect|prune|clear
 video-sum frames extract "<video-file>" --at 12:30 --around 2
 video-sum asr profiles
+video-sum comments fetch "<URL>" --mode hot --output comments.jsonl
+video-sum comments select comments.jsonl --output comment-candidates.json
+video-sum danmaku fetch "<URL>" --output danmaku.jsonl
+video-sum danmaku analyze danmaku.jsonl --output danmaku-analysis.json
 ```
 
 `capture` 只生成可复用的原始材料。宿主 AI 完成内容处理后，使用
@@ -65,6 +69,15 @@ video-sum asr profiles
 ```
 
 图片统一放在笔记同目录的 `assets/`，不创建视频专属目录。
+
+评论原语默认获取热门高赞一级评论；`--mode all --limit 0` 可获取所有当前
+可访问的一级评论，但不包含楼中楼，且可能耗时或触发平台限流。弹幕原语通过
+匿名 `seg.so` 分段接口获取当前可访问弹幕，不获取历史弹幕；接口失败时降级
+到 XML 样本并在 metadata 中标记 `sampled_degraded`。
+
+`danmaku analyze` 只生成时间热点、规范化复读簇和透明的情感词典信号，
+`comments select` 只按互动与信息量生成评论候选。二者都明确要求宿主 AI
+完成语义判断；高赞不代表事实正确。
 
 ## 保存目录与配置
 
@@ -92,7 +105,7 @@ uv run ruff check .
 uv run pytest
 uv sync --extra standalone
 uv run python scripts/build_standalone.py \
-  --target darwin-arm64 --version 0.2.1
+  --target darwin-arm64 --version 0.3.0
 ```
 
 推送匹配 `v*` 的 tag 会触发 GitHub Actions，构建五个平台的 ZIP 与

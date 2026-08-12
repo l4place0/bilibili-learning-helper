@@ -13,7 +13,7 @@ and Mermaid diagrams belong to the host AI through the separate
 ```text
 video URL
   → video-sum capture
-  → raw transcript + candidate frames
+  → raw transcript + candidate frames + optional audience material
   → host AI analysis
   → video-sum resource compose
   → one Markdown note + sibling assets/
@@ -56,6 +56,10 @@ video-sum library list|show|search
 video-sum cache dir|status|list|inspect|prune|clear
 video-sum frames extract "<video-file>" --at 12:30 --around 2
 video-sum asr profiles
+video-sum comments fetch "<URL>" --mode hot --output comments.jsonl
+video-sum comments select comments.jsonl --output comment-candidates.json
+video-sum danmaku fetch "<URL>" --output danmaku.jsonl
+video-sum danmaku analyze danmaku.jsonl --output danmaku-analysis.json
 ```
 
 `capture` creates reusable raw artifacts. After the host AI processes them,
@@ -68,6 +72,18 @@ video-sum asr profiles
 ```
 
 Images live in a sibling `assets/` directory; no per-video directory is made.
+
+Comment collection defaults to hot, highly liked top-level comments. Use
+`--mode all --limit 0` to fetch every currently accessible top-level comment;
+nested replies are intentionally excluded and full collection may be slow or
+rate-limited. Danmaku collection anonymously requests the current `seg.so`
+segments and never requests history. It falls back to the XML sample with
+`sampled_degraded` metadata when segment retrieval fails.
+
+`danmaku analyze` produces time hotspots, normalized repetition clusters, and
+transparent lexicon signals. `comments select` produces engagement and
+information-density candidates. Both require host-AI semantic review, and
+popularity is never treated as proof of factual correctness.
 
 ## Paths and configuration
 
@@ -95,7 +111,7 @@ uv run ruff check .
 uv run pytest
 uv sync --extra standalone
 uv run python scripts/build_standalone.py \
-  --target darwin-arm64 --version 0.2.1
+  --target darwin-arm64 --version 0.3.0
 ```
 
 Tags matching `v*` trigger GitHub Actions to build five platform bundles plus
