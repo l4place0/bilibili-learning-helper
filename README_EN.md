@@ -111,7 +111,7 @@ uv run ruff check .
 uv run pytest
 uv sync --extra standalone
 uv run python scripts/build_standalone.py \
-  --target darwin-arm64 --version 0.3.0
+  --target darwin-arm64 --version 0.3.1
 ```
 
 Tags matching `v*` trigger GitHub Actions to build five platform bundles plus

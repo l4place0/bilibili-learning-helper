@@ -105,7 +105,7 @@ uv run ruff check .
 uv run pytest
 uv sync --extra standalone
 uv run python scripts/build_standalone.py \
-  --target darwin-arm64 --version 0.3.0
+  --target darwin-arm64 --version 0.3.1
 ```
 
 推送匹配 `v*` 的 tag 会触发 GitHub Actions，构建五个平台的 ZIP 与

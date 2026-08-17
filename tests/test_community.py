@@ -197,6 +197,53 @@ def test_danmaku_analysis_outputs_candidates_not_semantic_truth():
     assert result["sentiment_signals"]["positive"] == 2
     assert result["sentiment_signals"]["question"] == 1
     assert result["hotspots"][0]["start_seconds"] == 0
+    assert result["time_buckets"] == [
+        {
+            "start_seconds": 0,
+            "end_seconds": 30,
+            "count": 2,
+            "sentiment_signals": {"joke": 2, "positive": 2},
+            "leading_signals": ["joke", "positive"],
+            "representative_danmaku": [
+                {
+                    "progress_ms": 1000,
+                    "text": "哈哈厉害",
+                    "signals": ["joke", "positive"],
+                }
+            ],
+        },
+        {
+            "start_seconds": 60,
+            "end_seconds": 90,
+            "count": 1,
+            "sentiment_signals": {"question": 1},
+            "leading_signals": ["question"],
+            "representative_danmaku": [
+                {
+                    "progress_ms": 65000,
+                    "text": "为什么？",
+                    "signals": ["question"],
+                }
+            ],
+        },
+    ]
+
+
+def test_danmaku_time_bucket_representatives_prefer_signal_rich_unique_items():
+    records = [
+        {"progress_ms": 1000, "text": "普通弹幕", "weight": 20},
+        {"progress_ms": 2000, "text": "普通弹幕", "weight": 30},
+        {"progress_ms": 3000, "text": "为什么这么厉害", "weight": 1},
+    ]
+
+    bucket = analyze_danmaku({}, records)["time_buckets"][0]
+
+    assert bucket["sentiment_signals"] == {"positive": 1, "question": 1}
+    assert bucket["leading_signals"] == ["positive", "question"]
+    assert [item["text"] for item in bucket["representative_danmaku"]] == [
+        "为什么这么厉害",
+        "普通弹幕",
+    ]
 
 
 def test_comment_selection_favors_engagement_and_requires_ai_review():

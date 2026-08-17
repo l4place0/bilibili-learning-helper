@@ -4,7 +4,7 @@ import click
 
 
 @click.group()
-@click.version_option(version="0.3.0")
+@click.version_option(version="0.3.1")
 def main():
     """Video Summarizer CLI — structured JSON output for skill integration."""
     pass

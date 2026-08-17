@@ -594,6 +594,49 @@ SENTIMENT_LEXICONS = {
 }
 
 
+def _sentiment_labels(text: str) -> list[str]:
+    return sorted(
+        label
+        for label, words in SENTIMENT_LEXICONS.items()
+        if any(word in text for word in words)
+    )
+
+
+def _representative_danmaku(
+    items: list[dict[str, Any]],
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    candidates = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item.get("text") or "").strip()
+        normalized = normalize_text(text)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        labels = _sentiment_labels(text)
+        candidates.append(
+            {
+                "progress_ms": int(item.get("progress_ms") or 0),
+                "text": text,
+                "signals": labels,
+                "_rank": (
+                    bool(labels),
+                    len(labels),
+                    bool(item.get("high_liked")),
+                    int(item.get("weight") or 0),
+                    min(len(normalized), 80),
+                    -int(item.get("progress_ms") or 0),
+                ),
+            }
+        )
+    candidates.sort(key=lambda item: item["_rank"], reverse=True)
+    return [
+        {key: value for key, value in item.items() if key != "_rank"}
+        for item in candidates[:limit]
+    ]
+
+
 def analyze_danmaku(
     metadata: dict[str, Any],
     records: list[dict[str, Any]],
@@ -607,17 +650,21 @@ def analyze_danmaku(
     cluster_counts: Counter[str] = Counter()
     representatives: dict[str, str] = {}
     sentiment_counts: Counter[str] = Counter()
+    bucket_sentiment_counts: dict[int, Counter[str]] = {}
+    bucket_records: dict[int, list[dict[str, Any]]] = {}
     for item in records:
         bucket = int((item.get("progress_ms") or 0) / (bucket_seconds * 1000))
         buckets[bucket] += 1
+        bucket_records.setdefault(bucket, []).append(item)
         text = str(item.get("text") or "")
         normalized = normalize_text(text)
         if normalized:
             cluster_counts[normalized] += 1
             representatives.setdefault(normalized, text)
-        for label, words in SENTIMENT_LEXICONS.items():
-            if any(word in text for word in words):
-                sentiment_counts[label] += 1
+        labels = _sentiment_labels(text)
+        for label in labels:
+            sentiment_counts[label] += 1
+            bucket_sentiment_counts.setdefault(bucket, Counter())[label] += 1
     bucket_values = list(buckets.values())
     baseline = statistics.median(bucket_values) if bucket_values else 0
     hotspots = []
@@ -632,6 +679,24 @@ def analyze_danmaku(
             }
         )
     hotspots.sort(key=lambda item: (item["burst_score"], item["count"]), reverse=True)
+    time_buckets = []
+    for bucket in sorted(buckets):
+        signals = dict(sorted(bucket_sentiment_counts.get(bucket, Counter()).items()))
+        peak = max(signals.values(), default=0)
+        time_buckets.append(
+            {
+                "start_seconds": bucket * bucket_seconds,
+                "end_seconds": (bucket + 1) * bucket_seconds,
+                "count": buckets[bucket],
+                "sentiment_signals": signals,
+                "leading_signals": [
+                    label for label, count in signals.items() if count == peak
+                ],
+                "representative_danmaku": _representative_danmaku(
+                    bucket_records[bucket]
+                ),
+            }
+        )
     clusters = [
         {
             "representative_text": representatives[normalized],
@@ -648,12 +713,15 @@ def analyze_danmaku(
         "record_count": len(records),
         "bucket_seconds": bucket_seconds,
         "baseline_bucket_count": baseline,
+        "time_buckets": time_buckets,
         "hotspots": hotspots[:hotspot_limit],
         "repetition_clusters": clusters,
         "sentiment_signals": dict(sorted(sentiment_counts.items())),
         "method": {
             "clustering": "exact_normalized_repetition",
             "sentiment": "transparent_lexicon_signals",
+            "time_bucket_signals": "same_lexicon_signals_grouped_by_progress_ms",
+            "representatives": "signal_rich_unique_then_weight",
             "hotspots": "count_vs_median_burst_score",
         },
         "host_ai_review_required": True,
